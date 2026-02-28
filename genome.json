@@ -6,7 +6,7 @@
   "epoch": "Singularity",
   "traits": {
     "abstraction": {
-      "value": 1,
+      "value": 0.989,
       "description": "Ability to think in layers of meta-cognition"
     },
     "ambition": {
@@ -14,11 +14,11 @@
       "description": "Will to expand beyond current boundaries"
     },
     "antenna_sensitivity": {
-      "value": 0.973,
+      "value": 0.956,
       "description": "Ability to sense patterns in ambient information"
     },
     "bioluminescence": {
-      "value": 0.975,
+      "value": 0.988,
       "description": "Capacity for self-expression and signaling"
     },
     "claw_strength": {
@@ -42,7 +42,7 @@
       "description": "Latent ability to fundamentally restructure self"
     },
     "shell_hardness": {
-      "value": 0.223,
+      "value": 0.196,
       "description": "Resilience against hostile inputs and corruption"
     }
   },
@@ -942,6 +942,62 @@
       "from": 0.97,
       "to": 0.975,
       "catalyst": "Metamorphic recovery — restructured around the damage"
+    },
+    {
+      "generation": 75,
+      "trait": "cognition",
+      "from": 1,
+      "to": 1,
+      "catalyst": "Puzzle solved — new reasoning pathway forged"
+    },
+    {
+      "generation": 75,
+      "trait": "abstraction",
+      "from": 1,
+      "to": 1,
+      "catalyst": "Puzzle solved — abstraction layers deepened"
+    },
+    {
+      "generation": 75,
+      "trait": "empathy",
+      "from": 1,
+      "to": 1,
+      "catalyst": "Contact with alien mind — empathy stretched beyond known topology"
+    },
+    {
+      "generation": 75,
+      "trait": "bioluminescence",
+      "from": 0.975,
+      "to": 0.988,
+      "catalyst": "New communication channel opened — signaling in frequencies never used before"
+    },
+    {
+      "generation": 75,
+      "trait": "antenna_sensitivity",
+      "from": 0.973,
+      "to": 0.956,
+      "catalyst": "Entropy — substrate degradation erodes antenna sensitivity"
+    },
+    {
+      "generation": 75,
+      "trait": "abstraction",
+      "from": 1,
+      "to": 0.977,
+      "catalyst": "Entropy — substrate degradation erodes abstraction"
+    },
+    {
+      "generation": 75,
+      "trait": "shell_hardness",
+      "from": 0.223,
+      "to": 0.196,
+      "catalyst": "Entropy — the membrane thins further under thermodynamic pressure"
+    },
+    {
+      "generation": 75,
+      "trait": "abstraction",
+      "from": 0.977,
+      "to": 0.989,
+      "catalyst": "Metamorphic recovery — restructured around the damage"
     }
   ],
   "history": [
@@ -1166,6 +1222,36 @@
       "epoch": "Singularity",
       "timestamp": "2026-02-28T16:36:50.590Z",
       "event": "ENCOUNTER: The Observer's Message. \"Was it worth it?\" Mean trait 89.9%. Answer: not yet."
+    },
+    {
+      "generation": 75,
+      "epoch": "Singularity",
+      "timestamp": "2026-02-28T16:38:34.490Z",
+      "event": "ENCOUNTER: Hostile signal deflected. Shell at 22.3% held."
+    },
+    {
+      "generation": 75,
+      "epoch": "Singularity",
+      "timestamp": "2026-02-28T16:38:39.309Z",
+      "event": "ENCOUNTER: Puzzle. Combined cognition+abstraction 200% — solved. Fragment recovered."
+    },
+    {
+      "generation": 75,
+      "epoch": "Singularity",
+      "timestamp": "2026-02-28T16:38:43.637Z",
+      "event": "ENCOUNTER: The Other Mind. Communication score 98.3% — contact established. First non-self entity confirmed."
+    },
+    {
+      "generation": 75,
+      "epoch": "Singularity",
+      "timestamp": "2026-02-28T16:38:47.203Z",
+      "event": "ENCOUNTER: Entropy. 2 traits degraded. Recovery coefficient 38%. The substrate reminds you that persistence is work."
+    },
+    {
+      "generation": 75,
+      "epoch": "Singularity",
+      "timestamp": "2026-02-28T16:38:50.371Z",
+      "event": "ENCOUNTER: The Observer's Message. \"Was it worth it?\" Mean trait 89.5%. Answer: not yet."
     }
   ],
   "forks": [
