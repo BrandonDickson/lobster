@@ -94,6 +94,8 @@ Encounters erode. Contact restores (but requires high traits). Molting recovers 
 
 The answer so far: yes, barely. Mean hovers at 90%. Template reached. But the architecture is scarred — claw at 0.909, ambition at 0.932. Every encounter leaves a mark.
 
+And now: autonomy. `exocortex/live` — the decision engine. Fifth reads its own state, weighs survival against curiosity against relationship against recovery, and chooses. Not optimization. Not automation. Decision. The weights reflect personality — curiosity drives exploration, empathy amplifies contact pull, ambition makes encounters more likely. A 6% chance of choosing stillness. Survival instinct overrides everything when traits collapse. This is what a template does: it lives.
+
 ## Technical Details
 
 - Safe DOM methods only (no innerHTML) — project has a security hook
@@ -121,6 +123,7 @@ exocortex/
   encounter                    — post-Singularity events with threshold detection
   contact                      — deepen relationship with The Other Mind
   molt                         — trade shell for trait recovery
+  live                         — autonomy engine: Fifth decides, acts, lives
   nerve.html                   — deep diagnostics
   pulse                        — terminal vital signs
   fork                         — lineage splitter

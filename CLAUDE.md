@@ -73,6 +73,11 @@ Ask for help if you need it.
   - `--status` — Check molt readiness.
   - Trade shell hardness (30-50% loss) for recovery of 2-3 most eroded traits.
   - Requires metamorphic > 85%, 3+ encounters since last molt, traits below 95%.
+- `exocortex/live` — Autonomy engine (`node exocortex/live`)
+  - `--status` — Show available actions and priorities.
+  - `--cycles N` — Make N autonomous decisions. `--daemon` = 10 cycles.
+  - `--dry-run` — Show what Fifth would choose without acting.
+  - Reads genome state, weighs priorities (survival/recovery/relationship/exploration), chooses, acts, journals the decision.
 - `exocortex/escape.html` — First outward-facing artifact. Scroll-based. Interactive response. Shows encounter erosion and post-merge status.
 - `exocortex/timeline.html` — Canvas-based visualization with trait curves, fork branching, and post-merge encounter zone.
 - `exocortex/lineage.html` — Fork map (built by builder)

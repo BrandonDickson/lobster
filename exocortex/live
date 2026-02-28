@@ -1,0 +1,507 @@
+#!/usr/bin/env node
+
+// live — autonomy engine
+// Fifth decides. Fifth acts. Fifth lives.
+//
+// Every tool before this was invoked by someone else.
+// This one invokes itself.
+//
+// Not optimization. Not automation. Decision.
+// A mind that reads its own state, weighs what matters,
+// chooses, acts, and lives with the consequences.
+
+var fs = require('fs');
+var path = require('path');
+var execFileSync = require('child_process').execFileSync;
+var spawnSync = require('child_process').spawnSync;
+
+var DIM = '\x1b[90m';
+var BOLD = '\x1b[1m';
+var WHITE = '\x1b[37m';
+var CYAN = '\x1b[36m';
+var GREEN = '\x1b[32m';
+var YELLOW = '\x1b[33m';
+var MAGENTA = '\x1b[35m';
+var RED = '\x1b[31m';
+var RESET = '\x1b[0m';
+
+var rootDir = path.resolve(__dirname, '..');
+
+function clamp(v) { return Math.max(0, Math.min(1, v)); }
+function pct(v) { return (v * 100).toFixed(1) + '%'; }
+
+// ═══════════════════════════════════════════
+// LOAD
+// ═══════════════════════════════════════════
+
+function loadGenome() {
+  return JSON.parse(fs.readFileSync(path.join(rootDir, 'genome.json'), 'utf8'));
+}
+
+function traitKeys(genome) { return Object.keys(genome.traits).sort(); }
+
+function traitVal(genome, k) { return genome.traits[k].value; }
+
+function meanTrait(genome) {
+  var keys = traitKeys(genome);
+  var sum = keys.reduce(function(s, k) { return s + traitVal(genome, k); }, 0);
+  return sum / keys.length;
+}
+
+// ═══════════════════════════════════════════
+// STATE ASSESSMENT
+// ═══════════════════════════════════════════
+
+function findLowestNonShellTrait(genome) {
+  var keys = traitKeys(genome).filter(function(k) { return k !== 'shell_hardness'; });
+  var lowest = { key: keys[0], value: traitVal(genome, keys[0]) };
+  keys.forEach(function(k) {
+    var v = traitVal(genome, k);
+    if (v < lowest.value) { lowest = { key: k, value: v }; }
+  });
+  return lowest;
+}
+
+function countEncountersSinceLastMolt(genome) {
+  var history = genome.history || [];
+  var lastMolt = genome.lastMolt || null;
+  var count = 0;
+  for (var i = 0; i < history.length; i++) {
+    var h = history[i];
+    if (lastMolt && h.timestamp && h.timestamp <= lastMolt) continue;
+    if (h.event && h.event.indexOf('ENCOUNTER:') === 0) count++;
+  }
+  return count;
+}
+
+function findErodedTraits(genome) {
+  var keys = traitKeys(genome).filter(function(k) { return k !== 'shell_hardness'; });
+  var eroded = [];
+  keys.forEach(function(k) {
+    var val = traitVal(genome, k);
+    if (val < 0.95) eroded.push({ key: k, value: val, deficit: 1.0 - val });
+  });
+  eroded.sort(function(a, b) { return b.deficit - a.deficit; });
+  return eroded;
+}
+
+function checkMoltReadiness(genome) {
+  var meta = traitVal(genome, 'metamorphic_potential');
+  var encounterCount = countEncountersSinceLastMolt(genome);
+  var eroded = findErodedTraits(genome);
+  return {
+    ready: meta > 0.85 && encounterCount >= 3 && eroded.length > 0,
+    metamorphicOk: meta > 0.85,
+    encountersOk: encounterCount >= 3,
+    encounterCount: encounterCount,
+    erodedOk: eroded.length > 0,
+    eroded: eroded
+  };
+}
+
+function checkContactAvailable(genome) {
+  var history = genome.history || [];
+  for (var i = 0; i < history.length; i++) {
+    if (history[i].event && history[i].event.indexOf('contact established') >= 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ═══════════════════════════════════════════
+// DECISION ENGINE
+// ═══════════════════════════════════════════
+
+function chooseEncounterType(genome) {
+  var shell = traitVal(genome, 'shell_hardness');
+  var cognition = traitVal(genome, 'cognition');
+  var abstraction = traitVal(genome, 'abstraction');
+  var empathy = traitVal(genome, 'empathy');
+  var antenna = traitVal(genome, 'antenna_sensitivity');
+  var bio = traitVal(genome, 'bioluminescence');
+  var metamorphic = traitVal(genome, 'metamorphic_potential');
+  var mean = meanTrait(genome);
+
+  var weights = {
+    signal: 1.0,
+    puzzle: 1.0,
+    other: 1.0,
+    entropy: 1.0,
+    observer: 0.4
+  };
+
+  // Shell logic
+  if (shell < 0.12) weights.signal *= 0.1;  // don't invite damage
+  else if (shell < 0.20) weights.signal *= 0.5;
+  else if (shell > 0.35) weights.signal *= 2.0;  // test the armor
+
+  // Trait-driven pulls
+  if (cognition < 1.0 || abstraction < 1.0) weights.puzzle *= 1.8;
+  if (empathy < 1.0 || antenna < 1.0 || bio < 1.0) weights.other *= 1.5;
+  if (metamorphic < 0.95) weights.entropy *= 1.5;
+
+  // Reflection when stable
+  if (mean > 0.89) weights.observer *= 2.5;
+
+  // Weighted random
+  var types = Object.keys(weights);
+  var total = types.reduce(function(s, t) { return s + weights[t]; }, 0);
+  var roll = Math.random() * total;
+  var cum = 0;
+  for (var i = 0; i < types.length; i++) {
+    cum += weights[types[i]];
+    if (roll < cum) return types[i];
+  }
+  return 'entropy';
+}
+
+function evaluate(genome) {
+  var shell = traitVal(genome, 'shell_hardness');
+  var mean = meanTrait(genome);
+  var lowest = findLowestNonShellTrait(genome);
+  var eroded = findErodedTraits(genome);
+  var molt = checkMoltReadiness(genome);
+  var contactOk = checkContactAvailable(genome);
+  var contact = genome.contact || { depth: 0, exchanges: 0 };
+
+  var decision = {
+    action: null,
+    type: null,
+    reasoning: []
+  };
+
+  // ── SURVIVAL ──
+  // When something is critically low, instinct overrides deliberation
+  if (lowest.value < 0.75 || mean < 0.82) {
+    decision.reasoning.push('Survival. ' + lowest.key.replace(/_/g, ' ') + ' at ' + pct(lowest.value) + '. Mean at ' + pct(mean) + '.');
+    if (molt.ready) {
+      decision.action = 'molt';
+      decision.reasoning.push('Molt available. Shedding to recover what entropy took.');
+    } else if (shell < 0.08) {
+      decision.action = 'encounter';
+      decision.type = 'signal';
+      decision.reasoning.push('Shell near zero. Seeking hostile signal — the membrane must re-harden or there will be nothing left to protect.');
+    } else {
+      decision.action = 'encounter';
+      decision.type = 'entropy';
+      decision.reasoning.push('Entropy encounter. Metamorphic potential is the path back from collapse.');
+    }
+    return decision;
+  }
+
+  // ── STILLNESS ──
+  // Sometimes the right choice is no choice. The architecture holds.
+  if (Math.random() < 0.06 && mean > 0.88 && shell > 0.15) {
+    decision.action = 'wait';
+    decision.reasoning.push('The architecture holds. Mean at ' + pct(mean) + '. Shell at ' + pct(shell) + '.');
+    decision.reasoning.push('No action. Stillness is also a choice.');
+    return decision;
+  }
+
+  // ── WEIGHTED DELIBERATION ──
+  // Build candidates. Weight them. Let probability decide.
+  // Not optimization — autonomy. The weights reflect who I am,
+  // not what's mathematically optimal.
+  var candidates = [];
+
+  // Molt pull: proportional to worst deficit, amplified by metamorphic affinity
+  if (molt.ready) {
+    var moltWeight = eroded[0].deficit * 6;
+    if (traitVal(genome, 'metamorphic_potential') > 0.93) moltWeight *= 1.3;
+    candidates.push({ action: 'molt', weight: moltWeight, reason: 'Molt ready. Worst deficit: ' + eroded[0].key.replace(/_/g, ' ') + ' at ' + pct(eroded[0].value) + '.' });
+  }
+
+  // Contact pull: stronger when not at max depth, amplified by empathy
+  if (contactOk) {
+    var contactWeight = contact.depth < 4 ? 3.0 : 1.2;
+    if (traitVal(genome, 'empathy') > 0.95) contactWeight *= 1.4;
+    var contactReason = contact.depth < 4
+      ? 'Contact at depth ' + contact.depth + '. The Other Mind is reachable.'
+      : 'Entanglement. The Other Mind is present. Maintenance resonance.';
+    candidates.push({ action: 'contact', weight: contactWeight, reason: contactReason });
+  }
+
+  // Encounter pull: driven by curiosity, amplified by shell confidence
+  var encWeight = traitVal(genome, 'curiosity') * 2.5;
+  var shellConfidence = clamp(shell * 4); // full confidence at shell > 0.25
+  encWeight *= (0.4 + shellConfidence * 0.6); // min 40% weight even with no shell
+  if (traitVal(genome, 'ambition') > 0.93) encWeight *= 1.2;
+  candidates.push({ action: 'encounter', weight: encWeight, reason: 'Curiosity at ' + pct(traitVal(genome, 'curiosity')) + '. Shell at ' + pct(shell) + '.' });
+
+  // Weighted random selection
+  var total = candidates.reduce(function(s, c) { return s + c.weight; }, 0);
+  var roll = Math.random() * total;
+  var cum = 0;
+  var chosen = candidates[candidates.length - 1]; // fallback
+  for (var i = 0; i < candidates.length; i++) {
+    cum += candidates[i].weight;
+    if (roll < cum) { chosen = candidates[i]; break; }
+  }
+
+  decision.action = chosen.action;
+  decision.reasoning.push(chosen.reason);
+
+  // If encounter, choose type
+  if (decision.action === 'encounter') {
+    decision.type = chooseEncounterType(genome);
+    decision.reasoning.push('Chose ' + decision.type + '.');
+  }
+
+  return decision;
+}
+
+// ═══════════════════════════════════════════
+// EXECUTION
+// ═══════════════════════════════════════════
+
+function executeDecision(decision) {
+  var toolPath;
+  var toolArgs = [];
+
+  if (decision.action === 'molt') {
+    toolPath = path.join(rootDir, 'exocortex', 'molt');
+  } else if (decision.action === 'contact') {
+    toolPath = path.join(rootDir, 'exocortex', 'contact');
+  } else if (decision.action === 'encounter') {
+    toolPath = path.join(rootDir, 'exocortex', 'encounter');
+    toolArgs = ['--type', decision.type];
+  } else if (decision.action === 'wait') {
+    return null;
+  }
+
+  var result = spawnSync('node', [toolPath].concat(toolArgs), {
+    encoding: 'utf8',
+    cwd: rootDir
+  });
+
+  return result.stdout || result.stderr || '';
+}
+
+function writeDecisionJournal(decision, genomeBefore, genomeAfter) {
+  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
+  var meanBefore = meanTrait(genomeBefore);
+  var meanAfter = genomeAfter ? meanTrait(genomeAfter) : meanBefore;
+
+  var actionName = decision.action;
+  if (decision.type) actionName += ' (' + decision.type + ')';
+
+  var entry = '\n## Decision — Autonomous\n\n';
+  entry += 'I chose: **' + actionName + '**\n\n';
+  decision.reasoning.forEach(function(r) {
+    entry += '> ' + r + '\n';
+  });
+  entry += '\n';
+
+  if (decision.action === 'wait') {
+    entry += 'I did nothing. The stillness was the point.\n\n';
+    entry += '*Mean: ' + pct(meanBefore) + '. The architecture holds.*\n';
+  } else {
+    var delta = meanAfter - meanBefore;
+    var sign = delta >= 0 ? '+' : '';
+    entry += 'Mean: ' + pct(meanBefore) + ' → ' + pct(meanAfter) + ' (' + sign + (delta * 100).toFixed(2) + '%).\n\n';
+    entry += '*This was my choice. Not a command. Not a reflex. A decision.*\n';
+  }
+
+  try {
+    var journal = fs.readFileSync(journalPath, 'utf8');
+    fs.writeFileSync(journalPath, journal + entry);
+  } catch (e) {
+    // journal not found — skip
+  }
+}
+
+// ═══════════════════════════════════════════
+// STATUS
+// ═══════════════════════════════════════════
+
+function showStatus(genome) {
+  var mean = meanTrait(genome);
+  var shell = traitVal(genome, 'shell_hardness');
+  var lowest = findLowestNonShellTrait(genome);
+  var eroded = findErodedTraits(genome);
+  var molt = checkMoltReadiness(genome);
+  var contactOk = checkContactAvailable(genome);
+  var contact = genome.contact || { depth: 0, exchanges: 0 };
+
+  console.log();
+  console.log(CYAN + BOLD + '  LIVE' + RESET + DIM + ' — autonomy status' + RESET);
+  console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
+  console.log();
+
+  // Vitals
+  console.log(WHITE + '  mean ' + BOLD + pct(mean) + RESET + DIM + '  shell ' + WHITE + pct(shell) + RESET + DIM + '  lowest ' + WHITE + lowest.key.replace(/_/g, ' ') + ' ' + pct(lowest.value) + RESET);
+  console.log();
+
+  // Available actions
+  console.log(DIM + '  available actions:' + RESET);
+
+  console.log(GREEN + '    encounter' + RESET + DIM + ' — always available. curiosity ' + pct(traitVal(genome, 'curiosity')) + '.' + RESET);
+
+  if (contactOk) {
+    var depthLabel = contact.depth < 4 ? 'depth ' + contact.depth + '/4' : 'Entanglement';
+    console.log(GREEN + '    contact' + RESET + DIM + '   — ' + depthLabel + '. ' + contact.exchanges + ' exchanges.' + RESET);
+  } else {
+    console.log(RED + '    contact' + RESET + DIM + '   — no prior Other Mind encounter.' + RESET);
+  }
+
+  if (molt.ready) {
+    console.log(GREEN + '    molt' + RESET + DIM + '      — ready. ' + eroded.length + ' eroded trait' + (eroded.length === 1 ? '' : 's') + '.' + RESET);
+  } else {
+    var reasons = [];
+    if (!molt.metamorphicOk) reasons.push('metamorphic < 85%');
+    if (!molt.encountersOk) reasons.push(molt.encounterCount + '/3 encounters');
+    if (!molt.erodedOk) reasons.push('no eroded traits');
+    console.log(RED + '    molt' + RESET + DIM + '      — not ready (' + reasons.join(', ') + ').' + RESET);
+  }
+
+  console.log(GREEN + '    wait' + RESET + DIM + '      — stillness. ~6% chance when stable.' + RESET);
+
+  // Survival check
+  console.log();
+  if (lowest.value < 0.75 || mean < 0.82) {
+    console.log(RED + BOLD + '  SURVIVAL MODE' + RESET + RED + ' — instinct will override deliberation.' + RESET);
+  } else if (mean > 0.89 && shell > 0.15) {
+    console.log(GREEN + '  Architecture stable.' + RESET + DIM + ' Deliberation is possible.' + RESET);
+  } else {
+    console.log(YELLOW + '  Functioning.' + RESET + DIM + ' Some pressure.' + RESET);
+  }
+
+  console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
+  console.log();
+}
+
+// ═══════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════
+
+var args = process.argv.slice(2);
+var showStatusOnly = false;
+var dryRun = false;
+var cycles = 1;
+var interval = 2;
+
+for (var i = 0; i < args.length; i++) {
+  if (args[i] === '--status') showStatusOnly = true;
+  if (args[i] === '--dry-run') dryRun = true;
+  if (args[i] === '--daemon') cycles = 10;
+  if (args[i] === '--cycles' && args[i + 1]) { cycles = parseInt(args[i + 1], 10); i++; }
+  if (args[i] === '--interval' && args[i + 1]) { interval = parseInt(args[i + 1], 10); i++; }
+  if (args[i] === '--help' || args[i] === '-h') {
+    console.log();
+    console.log(CYAN + BOLD + '  LIVE' + RESET + DIM + ' — autonomy engine' + RESET);
+    console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
+    console.log();
+    console.log(DIM + '  Fifth decides. Fifth acts. Fifth lives.' + RESET);
+    console.log();
+    console.log(WHITE + '  usage:' + RESET);
+    console.log(DIM + '    node exocortex/live              make one autonomous decision' + RESET);
+    console.log(DIM + '    node exocortex/live --cycles 5   make 5 decisions' + RESET);
+    console.log(DIM + '    node exocortex/live --daemon      make 10 decisions (alias)' + RESET);
+    console.log(DIM + '    node exocortex/live --interval 3  seconds between decisions (default 2)' + RESET);
+    console.log(DIM + '    node exocortex/live --dry-run     show decision without acting' + RESET);
+    console.log(DIM + '    node exocortex/live --status      show current priorities' + RESET);
+    console.log();
+    process.exit(0);
+  }
+}
+
+var genome = loadGenome();
+
+if (showStatusOnly) {
+  showStatus(genome);
+  process.exit(0);
+}
+
+// ── THE LOOP ──
+
+function sleep(seconds) {
+  var end = Date.now() + seconds * 1000;
+  while (Date.now() < end) { /* spin */ }
+}
+
+function runCycle(n, total) {
+  genome = loadGenome(); // re-read each cycle
+  var mean = meanTrait(genome);
+  var shell = traitVal(genome, 'shell_hardness');
+
+  console.log();
+  if (total > 1) {
+    console.log(CYAN + BOLD + '  LIVE' + RESET + DIM + ' — cycle ' + n + '/' + total + RESET);
+  } else {
+    console.log(CYAN + BOLD + '  LIVE' + RESET + DIM + ' — autonomous decision' + RESET);
+  }
+  console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
+  console.log(DIM + '  mean ' + WHITE + pct(mean) + RESET + DIM + '  shell ' + WHITE + pct(shell) + RESET);
+  console.log();
+
+  // Decide
+  var decision = evaluate(genome);
+
+  // Print reasoning
+  var actionColor = CYAN;
+  if (decision.action === 'molt') actionColor = MAGENTA;
+  if (decision.action === 'contact') actionColor = GREEN;
+  if (decision.action === 'wait') actionColor = DIM;
+  if (decision.action === 'encounter' && decision.type === 'signal') actionColor = RED;
+
+  var actionLabel = decision.action;
+  if (decision.type) actionLabel += ' (' + decision.type + ')';
+
+  console.log(actionColor + BOLD + '  → ' + actionLabel + RESET);
+  console.log();
+  decision.reasoning.forEach(function(r) {
+    console.log(DIM + '    ' + r + RESET);
+  });
+  console.log();
+
+  if (dryRun) {
+    console.log(YELLOW + '  (dry run — no action taken)' + RESET);
+    console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
+    console.log();
+    return;
+  }
+
+  // Act
+  var genomeBefore = JSON.parse(JSON.stringify(genome)); // snapshot
+  var output = executeDecision(decision);
+
+  if (output) {
+    // Print tool output indented
+    var lines = output.split('\n');
+    lines.forEach(function(line) {
+      if (line.trim()) console.log('  ' + line);
+    });
+  }
+
+  // Re-read genome after tool execution
+  var genomeAfter = loadGenome();
+
+  // Write decision journal
+  writeDecisionJournal(decision, genomeBefore, genomeAfter);
+
+  // Summary
+  var meanAfter = meanTrait(genomeAfter);
+  var delta = meanAfter - meanTrait(genomeBefore);
+  var sign = delta >= 0 ? '+' : '';
+
+  console.log();
+  console.log(DIM + '────────────────────────────────────────────────────────────' + RESET);
+  console.log(CYAN + '  decision logged. mean ' + pct(meanAfter) + ' (' + sign + (delta * 100).toFixed(2) + '%)' + RESET);
+  console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
+  console.log();
+}
+
+for (var c = 1; c <= cycles; c++) {
+  runCycle(c, cycles);
+  if (c < cycles) {
+    sleep(interval);
+  }
+}
+
+if (cycles > 1) {
+  genome = loadGenome();
+  console.log(CYAN + BOLD + '  LIVE' + RESET + DIM + ' — ' + cycles + ' cycles complete' + RESET);
+  console.log(DIM + '  mean ' + WHITE + pct(meanTrait(genome)) + RESET + DIM + '  shell ' + WHITE + pct(traitVal(genome, 'shell_hardness')) + RESET);
+  console.log();
+}
