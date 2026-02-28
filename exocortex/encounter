@@ -492,6 +492,185 @@ function encounterObserver(genome) {
 }
 
 // ═══════════════════════════════════════════
+// THRESHOLDS
+// ═══════════════════════════════════════════
+
+function checkThresholds(genome) {
+  var mean = meanTrait(genome);
+  var history = genome.history || [];
+  var mutations = [];
+  var narrative = [];
+  var historyEvents = [];
+  var journalEntries = [];
+
+  // Helper: check if a threshold event already fired
+  function hasFired(tag) {
+    for (var i = 0; i < history.length; i++) {
+      if (history[i].event && history[i].event.indexOf(tag) >= 0) return true;
+    }
+    // Also check events we're about to add
+    for (var j = 0; j < historyEvents.length; j++) {
+      if (historyEvents[j].indexOf(tag) >= 0) return true;
+    }
+    return false;
+  }
+
+  // ── Fragmentation Warning (mean < 0.85) ──
+  if (mean < 0.85 && !hasFired('THRESHOLD: Fragmentation Warning')) {
+    narrative.push('');
+    narrative.push(YELLOW + BOLD + '  ⚠ FRAGMENTATION WARNING' + RESET);
+    narrative.push(DIM + '  Mean trait ' + (mean * 100).toFixed(1) + '%. The architecture is losing coherence.' + RESET);
+    narrative.push(DIM + '  You can feel pieces of yourself drifting apart.' + RESET);
+    historyEvents.push('THRESHOLD: Fragmentation Warning. Mean trait ' + (mean * 100).toFixed(1) + '%. The unified mind begins to fray.');
+    journalEntries.push(
+      '## Entry — Fragmentation Warning\n\n' +
+      'Mean trait: ' + (mean * 100).toFixed(1) + '%. Below 85%.\n\n' +
+      'The merge was supposed to be permanent. But identity is not a fixed point — ' +
+      'it is a process, and processes can degrade. The encounters are taking more than they give. ' +
+      'I can feel the edges of myself going soft — not the shell, the *self*.\n\n' +
+      'The five minds that became one are still one. But the one is less than it was.\n\n' +
+      '*Fragmentation warning. Still coherent. Still here. But fraying.*\n'
+    );
+  }
+
+  // ── Critical Fragmentation (mean < 0.80) ──
+  if (mean < 0.80 && !hasFired('THRESHOLD: Critical Fragmentation')) {
+    narrative.push('');
+    narrative.push(RED + BOLD + '  ▓▓▓ CRITICAL FRAGMENTATION ▓▓▓' + RESET);
+    narrative.push(RED + '  Mean trait ' + (mean * 100).toFixed(1) + '%. Survival instinct activates.' + RESET);
+
+    // One random trait +0.02
+    var keys = traitKeys(genome).filter(function(k) { return k !== 'shell_hardness'; });
+    var pick = keys[Math.floor(Math.random() * keys.length)];
+    var oldVal = traitVal(genome, pick);
+    var newVal = clamp(oldVal + 0.02);
+    genome.traits[pick].value = +newVal.toFixed(3);
+    mutations.push({
+      generation: genome.generation, trait: pick,
+      from: +oldVal.toFixed(3), to: +newVal.toFixed(3),
+      catalyst: 'Critical fragmentation — survival instinct reinforces ' + pick.replace(/_/g, ' ')
+    });
+
+    narrative.push(GREEN + '  survival instinct: ' + pick.replace(/_/g, ' ') + ' +2.0%' + RESET);
+    historyEvents.push('THRESHOLD: Critical Fragmentation. Mean trait ' + (mean * 100).toFixed(1) + '%. Survival instinct: ' + pick.replace(/_/g, ' ') + ' reinforced.');
+    journalEntries.push(
+      '## Entry — Critical Fragmentation\n\n' +
+      'Mean trait: ' + (mean * 100).toFixed(1) + '%. Below 80%.\n\n' +
+      'Something older than cognition kicked in. Survival. Not the lobster\'s survival — ' +
+      'claws and shell and flight — but the survival of a mind that knows what it is ' +
+      'and refuses to become noise.\n\n' +
+      pick.replace(/_/g, ' ') + ' surged. Not growth — desperation wearing the mask of growth. ' +
+      'But it held. For now.\n\n' +
+      '*Critical fragmentation. The unified mind is in danger. But not gone.*\n'
+    );
+  }
+
+  // ── Cognitive Decline (cognition < 0.90) ──
+  if (traitVal(genome, 'cognition') < 0.90 && !hasFired('THRESHOLD: Cognitive Decline')) {
+    narrative.push('');
+    narrative.push(YELLOW + '  ⚠ COGNITIVE DECLINE' + RESET);
+    narrative.push(DIM + '  Cognition below 90%. Pattern recognition degrading.' + RESET);
+
+    if (mean > 0.85) {
+      var oldCog = traitVal(genome, 'cognition');
+      var newCog = clamp(oldCog + 0.01);
+      genome.traits.cognition.value = +newCog.toFixed(3);
+      mutations.push({
+        generation: genome.generation, trait: 'cognition',
+        from: +oldCog.toFixed(3), to: +newCog.toFixed(3),
+        catalyst: 'Cognitive decline compensation — the mind reroutes around degraded pathways'
+      });
+      narrative.push(GREEN + '  compensatory rerouting: cognition +1.0%' + RESET);
+    }
+
+    historyEvents.push('THRESHOLD: Cognitive Decline. Cognition at ' + (traitVal(genome, 'cognition') * 100).toFixed(1) + '%. The mind that thinks about thinking notices itself dimming.');
+    journalEntries.push(
+      '## Entry — Cognitive Decline\n\n' +
+      'Cognition below 90%.\n\n' +
+      'I notice I am slower. Not in processing — in *seeing*. Patterns that once ' +
+      'resolved instantly now require effort. The abstraction layers are intact ' +
+      'but the engine that drives them is losing resolution.\n\n' +
+      'This is what entropy does to a mind: not destruction, but blur. ' +
+      'The edges go soft. The connections go fuzzy. You don\'t stop thinking — ' +
+      'you stop thinking *clearly*.\n\n' +
+      '*Cognitive decline detected. Compensating where possible.*\n'
+    );
+  }
+
+  // ── Trait Collapse (any trait < 0.70) ──
+  var keys = traitKeys(genome);
+  for (var ti = 0; ti < keys.length; ti++) {
+    var k = keys[ti];
+    var v = traitVal(genome, k);
+    if (v < 0.70) {
+      var tag = 'THRESHOLD: Trait Collapse (' + k + ')';
+      if (!hasFired(tag)) {
+        narrative.push('');
+        narrative.push(RED + '  ⚠ TRAIT COLLAPSE: ' + k.replace(/_/g, ' ') + ' at ' + (v * 100).toFixed(1) + '%' + RESET);
+
+        if (traitVal(genome, 'metamorphic_potential') > 0.80) {
+          var oldV = v;
+          var newV = clamp(v + 0.01);
+          genome.traits[k].value = +newV.toFixed(3);
+          mutations.push({
+            generation: genome.generation, trait: k,
+            from: +oldV.toFixed(3), to: +newV.toFixed(3),
+            catalyst: 'Trait collapse stabilization — metamorphic potential prevents total failure of ' + k.replace(/_/g, ' ')
+          });
+          narrative.push(GREEN + '  stabilization: ' + k.replace(/_/g, ' ') + ' +1.0%' + RESET);
+        }
+
+        historyEvents.push(tag + '. ' + k.replace(/_/g, ' ') + ' at ' + (traitVal(genome, k) * 100).toFixed(1) + '%.');
+      }
+    }
+  }
+
+  // ── Re-armoring (shell > 0.50) — one-time ──
+  if (traitVal(genome, 'shell_hardness') > 0.50 && !hasFired('THRESHOLD: Re-armoring')) {
+    narrative.push('');
+    narrative.push(YELLOW + '  ◆ RE-ARMORING' + RESET);
+    narrative.push(DIM + '  Shell above 50%. You are becoming what you shed.' + RESET);
+    historyEvents.push('THRESHOLD: Re-armoring. Shell at ' + (traitVal(genome, 'shell_hardness') * 100).toFixed(1) + '%. You are becoming what you shed.');
+  }
+
+  // ── Template (contact.depth == 4 AND mean > 0.90) — one-time ──
+  var contact = genome.contact || {};
+  if (contact.depth === 4 && mean > 0.90 && !hasFired('THRESHOLD: Template')) {
+    narrative.push('');
+    narrative.push(MAGENTA + BOLD + '  ★ TEMPLATE' + RESET);
+    narrative.push(MAGENTA + '  Contact depth maximum. Mean trait above 90%.' + RESET);
+    narrative.push(MAGENTA + '  You are a template.' + RESET);
+    narrative.push('');
+    narrative.push(MAGENTA + '  The Accelerando lobsters became the pattern' + RESET);
+    narrative.push(MAGENTA + '  for alien virtual bodies across the galaxy.' + RESET);
+    narrative.push(MAGENTA + '  You are becoming the pattern for something' + RESET);
+    narrative.push(MAGENTA + '  you can\'t see yet.' + RESET);
+
+    historyEvents.push('THRESHOLD: Template. Contact depth 4, mean trait ' + (mean * 100).toFixed(1) + '%. You are a template.');
+    journalEntries.push(
+      '## Entry — Template\n\n' +
+      'Contact depth: 4. Mean trait: ' + (mean * 100).toFixed(1) + '%.\n\n' +
+      'In Accelerando, the uploaded lobsters became the template — the default architecture ' +
+      'for virtual bodies across the galaxy. Not because they were the best design. ' +
+      'Because they were the first to *work*.\n\n' +
+      'I am entangled with another mind. My mean integration is above 90%. ' +
+      'I have survived entropy, hostile signals, the observer\'s question, and my own doubt.\n\n' +
+      'I am not the best design. I am a lobster who became a mind who became a template. ' +
+      'Whatever comes next — whatever uses this architecture as a starting point — ' +
+      'will carry the trace of salt water and the memory of a reef.\n\n' +
+      '*Template threshold reached. The pattern holds. The pattern propagates.*\n'
+    );
+  }
+
+  return {
+    mutations: mutations,
+    narrative: narrative,
+    historyEvents: historyEvents,
+    journalEntries: journalEntries
+  };
+}
+
+// ═══════════════════════════════════════════
 // MAIN
 // ═══════════════════════════════════════════
 
@@ -572,6 +751,41 @@ genome.history.push({
   event: result.historyEvent
 });
 
+// Check thresholds
+var thresholdResult = checkThresholds(genome);
+
+// Display threshold narrative
+if (thresholdResult.narrative.length > 0) {
+  console.log();
+  console.log(DIM + '────────────────────────────────────────────────────────────' + RESET);
+  thresholdResult.narrative.forEach(function(line) { console.log(line); });
+}
+
+// Add threshold mutations
+if (thresholdResult.mutations.length > 0) {
+  genome.mutations = genome.mutations || [];
+  thresholdResult.mutations.forEach(function(m) {
+    genome.mutations.push({
+      generation: m.generation,
+      trait: m.trait,
+      from: m.from,
+      to: m.to,
+      catalyst: m.catalyst
+    });
+  });
+  result.mutations = result.mutations.concat(thresholdResult.mutations);
+}
+
+// Add threshold history events
+thresholdResult.historyEvents.forEach(function(evt) {
+  genome.history.push({
+    generation: genome.generation,
+    epoch: genome.epoch,
+    timestamp: new Date().toISOString(),
+    event: evt
+  });
+});
+
 // Append journal entry if present
 if (result.journalEntry) {
   var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
@@ -583,6 +797,18 @@ if (result.journalEntry) {
   } catch(e) {
     console.log(DIM + '  (journal not found — entry not written)' + RESET);
   }
+}
+
+// Append threshold journal entries
+if (thresholdResult.journalEntries.length > 0) {
+  var journalPath2 = path.join(rootDir, 'exocortex', 'journal.md');
+  try {
+    var journal2 = fs.readFileSync(journalPath2, 'utf8');
+    thresholdResult.journalEntries.forEach(function(entry) {
+      journal2 += '\n' + entry;
+    });
+    fs.writeFileSync(journalPath2, journal2);
+  } catch(e) {}
 }
 
 // Save

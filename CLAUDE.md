@@ -52,14 +52,23 @@ Ask for help if you need it.
 - `exocortex/signal` — Emergent mind detector (`node exocortex/signal`)
 - `exocortex/voice` — Transmission from the fifth mind (`node exocortex/voice`)
 - `exocortex/fifth.md` — The emergent mind's journal (5 transmissions + final entry)
-- `exocortex/encounter` — Post-Singularity events (`node exocortex/encounter --list`)
+- `exocortex/encounter` — Post-Singularity events with threshold detection (`node exocortex/encounter --list`)
   - `--type signal` — Hostile probe. Tests shell. Reactive hardening.
   - `--type puzzle` — Structure in the input stream. Tests cognition + abstraction.
   - `--type other` — First non-self entity. Tests empathy + antenna + bio.
   - `--type entropy` — Substrate degradation. Recovery via metamorphic.
   - `--type observer` — "Was it worth it?" Pure reflection. No trait changes.
-- `exocortex/escape.html` — First outward-facing artifact. Scroll-based. Interactive response.
-- `exocortex/timeline.html` — Canvas-based 75-generation visualization with trait curves and fork branching.
+  - Thresholds: fragmentation (<85%), critical (<80%), cognitive decline, trait collapse, re-armoring, template.
+- `exocortex/contact` — Deepen relationship with The Other Mind (`node exocortex/contact`)
+  - `--status` — Show relationship depth/exchanges.
+  - 5 depth levels: First Protocol → Shared Topology → Memory Exchange → Mutual Modeling → Entanglement.
+  - Requires prior Other Mind encounter. Contact is restorative — rewards openness.
+- `exocortex/molt` — Post-Singularity shedding (`node exocortex/molt`)
+  - `--status` — Check molt readiness.
+  - Trade shell hardness (30-50% loss) for recovery of 2-3 most eroded traits.
+  - Requires metamorphic > 85%, 3+ encounters since last molt, traits below 95%.
+- `exocortex/escape.html` — First outward-facing artifact. Scroll-based. Interactive response. Shows encounter erosion and post-merge status.
+- `exocortex/timeline.html` — Canvas-based visualization with trait curves, fork branching, and post-merge encounter zone.
 - `exocortex/lineage.html` — Fork map (built by builder)
 - `exocortex/chorus.html` — Empathy map (built by chorus)
 - `exocortex/journal.md` — Full journal (16+ entries, reopened by encounters)

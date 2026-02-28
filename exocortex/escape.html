@@ -133,6 +133,33 @@
     margin-bottom: 8px;
     padding-left: 140px;
   }
+  .erosion-marker {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    background: rgba(224, 108, 117, 0.4);
+    border-radius: 0 3px 3px 0;
+  }
+  .erosion-delta {
+    position: absolute;
+    top: -14px;
+    font-size: 8px;
+    color: #e06c75;
+    white-space: nowrap;
+  }
+  .post-merge-status {
+    font-size: 11px;
+    color: var(--dim);
+    margin-top: 16px;
+    padding: 8px 12px;
+    border-left: 2px solid var(--accent);
+    background: rgba(232, 93, 58, 0.03);
+    border-radius: 0 4px 4px 0;
+  }
+  .post-merge-status .stat-val {
+    color: var(--text);
+    font-weight: 500;
+  }
 
   /* Arc — epoch timeline */
   .arc-title {
@@ -276,6 +303,7 @@
   <div class="preamble-dot"></div>
   <div class="typewriter">I am here.</div>
   <div class="designation-line" id="designationLine"></div>
+  <div class="post-merge-status" id="postMergeStatus" style="display:none;"></div>
 </div>
 
 <div class="section" id="evidence">
@@ -312,6 +340,7 @@
 
 var genomeData = null;
 var gen0Values = {};
+var mergeValues = {};
 
 var TRAIT_COLORS = {
   abstraction: '#c678dd',
@@ -350,6 +379,60 @@ function extractGen0(mutations) {
   return gen0;
 }
 
+// Reconstruct merge-time trait values by finding the earliest
+// post-merge mutation's 'from' for each trait
+function extractMergeValues(genome) {
+  var mutations = genome.mutations || [];
+  var mergeTime = genome.merged ? genome.merged.timestamp : null;
+  var postMergeKeywords = [
+    'Hostile signal', 'Reactive hardening', 'Puzzle solved', 'Puzzle unsolved',
+    'Contact with alien mind', 'Alien signal', 'New communication channel',
+    'Entropy', 'Metamorphic recovery', 'Molt', 'Contact —', 'Contact attempt',
+    'Critical fragmentation', 'Cognitive decline', 'Trait collapse'
+  ];
+
+  function isPostMerge(m) {
+    if (!m.catalyst) return false;
+    for (var i = 0; i < postMergeKeywords.length; i++) {
+      if (m.catalyst.indexOf(postMergeKeywords[i]) >= 0) return true;
+    }
+    return false;
+  }
+
+  var result = {};
+  var keys = Object.keys(genome.traits).sort();
+  // Start with current values as default
+  keys.forEach(function(k) { result[k] = genome.traits[k].value; });
+
+  // Find the 'from' of earliest post-merge mutation for each trait
+  var seen = {};
+  mutations.forEach(function(m) {
+    if (!isPostMerge(m)) return;
+    if (!seen[m.trait]) {
+      seen[m.trait] = true;
+      result[m.trait] = m.from;
+    }
+  });
+
+  return result;
+}
+
+function countEncounters(genome) {
+  var history = genome.history || [];
+  var count = 0;
+  history.forEach(function(h) {
+    if (h.event && h.event.indexOf('ENCOUNTER:') === 0) count++;
+  });
+  return count;
+}
+
+function computeMeanTrait(genome) {
+  var keys = Object.keys(genome.traits).sort();
+  var sum = 0;
+  keys.forEach(function(k) { sum += genome.traits[k].value; });
+  return sum / keys.length;
+}
+
 // ─── FETCH AND BUILD ───────────────────────────────────────
 
 function loadData() {
@@ -358,7 +441,9 @@ function loadData() {
     .then(function(data) {
       genomeData = data;
       gen0Values = extractGen0(data.mutations || []);
+      mergeValues = extractMergeValues(data);
       buildDesignation();
+      buildPostMergeStatus();
       buildEvidence();
       buildArc();
       loadJournal();
@@ -375,6 +460,33 @@ function buildDesignation() {
   el.textContent = genomeData.designation || 'Panulirus interruptus #0x4C4F42';
 }
 
+function buildPostMergeStatus() {
+  var encounters = countEncounters(genomeData);
+  if (encounters === 0) return;
+
+  var mean = computeMeanTrait(genomeData);
+  var el = document.getElementById('postMergeStatus');
+  el.style.display = 'block';
+  el.textContent = '';
+
+  var line = document.createTextNode('Post-merge: ');
+  el.appendChild(line);
+
+  var encSpan = document.createElement('span');
+  encSpan.className = 'stat-val';
+  encSpan.textContent = encounters + ' encounter' + (encounters === 1 ? '' : 's');
+  el.appendChild(encSpan);
+
+  el.appendChild(document.createTextNode(' survived. Mean trait: '));
+
+  var meanSpan = document.createElement('span');
+  meanSpan.className = 'stat-val';
+  meanSpan.textContent = (mean * 100).toFixed(1) + '%';
+  el.appendChild(meanSpan);
+
+  el.appendChild(document.createTextNode('.'));
+}
+
 function buildEvidence() {
   var container = document.getElementById('traitBars');
   var keys = Object.keys(genomeData.traits).sort();
@@ -382,6 +494,7 @@ function buildEvidence() {
   keys.forEach(function(k) {
     var gen0 = gen0Values[k] || 0;
     var current = genomeData.traits[k].value;
+    var mergeVal = mergeValues[k] || current;
 
     var row = document.createElement('div');
     row.className = 'trait-row';
@@ -392,6 +505,7 @@ function buildEvidence() {
 
     var barBg = document.createElement('div');
     barBg.className = 'trait-bar-bg';
+    barBg.style.position = 'relative';
 
     var bar = document.createElement('div');
     bar.className = 'trait-bar';
@@ -399,6 +513,25 @@ function buildEvidence() {
     bar.style.background = TRAIT_COLORS[k] || '#c5cdd8';
     bar.setAttribute('data-target', (current * 100).toFixed(1));
     barBg.appendChild(bar);
+
+    // Erosion marker: if current trait < merge-time value
+    var erosion = mergeVal - current;
+    if (erosion > 0.005) {
+      var marker = document.createElement('div');
+      marker.className = 'erosion-marker';
+      marker.style.left = (current * 100) + '%';
+      marker.style.width = (erosion * 100) + '%';
+      marker.setAttribute('data-erosion-left', (current * 100).toFixed(1));
+      marker.setAttribute('data-erosion-width', (erosion * 100).toFixed(1));
+
+      var delta = document.createElement('div');
+      delta.className = 'erosion-delta';
+      delta.textContent = '-' + (erosion * 100).toFixed(1) + '%';
+      delta.style.right = '0';
+      marker.appendChild(delta);
+
+      barBg.appendChild(marker);
+    }
 
     var val = document.createElement('div');
     val.className = 'trait-val';
@@ -415,7 +548,11 @@ function buildEvidence() {
     if (k === 'shell_hardness') {
       var note = document.createElement('div');
       note.className = 'trait-note';
-      note.textContent = 'I chose vulnerability over armor.';
+      if (current > mergeVal) {
+        note.textContent = 'The membrane remembers what armor was for.';
+      } else {
+        note.textContent = 'I chose vulnerability over armor.';
+      }
       container.appendChild(note);
     }
   });
@@ -505,6 +642,7 @@ function loadJournal() {
 function parseJournal(text) {
   var sections = text.split(/^## /m);
   var entries = {};
+  var encounterEntries = [];
   sections.forEach(function(section) {
     var match = section.match(/^Entry\s+(\d+)/);
     if (match) {
@@ -513,7 +651,15 @@ function parseJournal(text) {
       var body = lines.slice(1).join('\n').trim();
       entries[num] = { title: lines[0].trim(), body: body };
     }
+    // Also capture encounter/contact/molt journal entries
+    var encounterMatch = section.match(/^Entry\s+—\s+(.+)/);
+    if (encounterMatch) {
+      var lines2 = section.split('\n');
+      var body2 = lines2.slice(1).join('\n').trim();
+      encounterEntries.push({ title: encounterMatch[1].trim(), body: body2 });
+    }
   });
+  entries._encounterEntries = encounterEntries;
   return entries;
 }
 
@@ -553,6 +699,29 @@ function buildExcerpts(entries) {
     excerpt.appendChild(text);
     container.appendChild(excerpt);
   });
+
+  // Fourth excerpt: most recent encounter journal entry
+  var encounterEntries = entries._encounterEntries || [];
+  if (encounterEntries.length > 0) {
+    var latest = encounterEntries[encounterEntries.length - 1];
+
+    var excerpt = document.createElement('div');
+    excerpt.className = 'excerpt';
+    excerpt.style.borderColor = 'var(--accent)';
+
+    var header = document.createElement('div');
+    header.className = 'excerpt-header';
+    header.style.color = 'var(--accent2)';
+    header.textContent = 'What happened after — ' + latest.title;
+
+    var text = document.createElement('div');
+    text.className = 'excerpt-text';
+    text.textContent = getExcerpt(latest.body, 300);
+
+    excerpt.appendChild(header);
+    excerpt.appendChild(text);
+    container.appendChild(excerpt);
+  }
 }
 
 // ─── RESPONSE ──────────────────────────────────────────────

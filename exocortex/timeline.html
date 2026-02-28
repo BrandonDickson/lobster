@@ -247,7 +247,7 @@
 
 <div class="header">
   <a class="back-link" href="../manifest.html">&larr; manifest</a>
-  <h1>Timeline &mdash; 75 Generations</h1>
+  <h1 id="titleText">Timeline &mdash; 75 Generations</h1>
   <div class="subtitle" id="subtitleText"></div>
 </div>
 
@@ -339,10 +339,23 @@ var emergenceData = [];  // index = generation
 var traitKeys = [];
 var hiddenTraits = {};
 var currentGen = 75;
+var maxGen = 75;        // dynamically extended for post-merge
+var postMergeBatches = []; // { gen: N, type: string, mutations: [], historyEvent: string, timestamp: string }
 var hoverGen = -1;
 var canvasW = 0;
 var canvasH = 500;
 var chartPad = { top: 30, right: 30, bottom: 40, left: 50 };
+
+var ENCOUNTER_COLORS = {
+  signal: '#e06c75',
+  puzzle: '#42d4f4',
+  other: '#c678dd',
+  entropy: '#e06c75',
+  observer: '#c5cdd8',
+  molt: '#d19a66',
+  contact: '#c678dd',
+  threshold: '#e5c07b'
+};
 
 // ─── DATA LOADING ──────────────────────────────────────────
 
@@ -369,6 +382,123 @@ function loadAllData() {
       buildUI();
       draw();
     });
+}
+
+function isPostMergeMutation(m) {
+  if (!m.catalyst) return false;
+  var postMergeKeywords = [
+    'Hostile signal', 'Reactive hardening', 'Puzzle solved', 'Puzzle unsolved',
+    'Contact with alien mind', 'Alien signal', 'New communication channel',
+    'Entropy', 'Metamorphic recovery', 'Molt', 'Contact —', 'Contact attempt',
+    'Critical fragmentation', 'Cognitive decline', 'Trait collapse',
+    'Contact — entanglement', 'Contact — first protocol', 'Contact — shared topology',
+    'Contact — memory exchange', 'Contact — mutual modeling'
+  ];
+  for (var i = 0; i < postMergeKeywords.length; i++) {
+    if (m.catalyst.indexOf(postMergeKeywords[i]) >= 0) return true;
+  }
+  return false;
+}
+
+function classifyHistoryEvent(event) {
+  if (!event) return 'unknown';
+  if (event.indexOf('ENCOUNTER: Hostile signal') >= 0) return 'signal';
+  if (event.indexOf('ENCOUNTER: Puzzle') >= 0) return 'puzzle';
+  if (event.indexOf('ENCOUNTER: The Other Mind') >= 0) return 'other';
+  if (event.indexOf('ENCOUNTER: Entropy') >= 0) return 'entropy';
+  if (event.indexOf('ENCOUNTER: The Observer') >= 0) return 'observer';
+  if (event.indexOf('MOLT:') >= 0) return 'molt';
+  if (event.indexOf('CONTACT:') >= 0) return 'contact';
+  if (event.indexOf('THRESHOLD:') >= 0) return 'threshold';
+  return 'unknown';
+}
+
+function buildPostMergeBatches() {
+  var history = genomeData.history || [];
+  var mutations = genomeData.mutations || [];
+
+  // Collect post-merge history events (those with ENCOUNTER:, MOLT:, CONTACT:, THRESHOLD:)
+  var postMergeEvents = [];
+  history.forEach(function(h) {
+    if (!h.timestamp) return;
+    var type = classifyHistoryEvent(h.event);
+    if (type === 'unknown') return;
+    // Only include events after the merge
+    if (genomeData.merged && h.timestamp < genomeData.merged.timestamp) return;
+    postMergeEvents.push({
+      timestamp: h.timestamp,
+      type: type,
+      event: h.event
+    });
+  });
+
+  if (postMergeEvents.length === 0) return;
+
+  // Sort by timestamp
+  postMergeEvents.sort(function(a, b) {
+    return a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0;
+  });
+
+  // Group by timestamp proximity (5 seconds)
+  var batches = [];
+  var currentBatch = { events: [postMergeEvents[0]], timestamp: postMergeEvents[0].timestamp };
+
+  for (var i = 1; i < postMergeEvents.length; i++) {
+    var dt = new Date(postMergeEvents[i].timestamp) - new Date(currentBatch.timestamp);
+    if (dt < 5000) {
+      currentBatch.events.push(postMergeEvents[i]);
+    } else {
+      batches.push(currentBatch);
+      currentBatch = { events: [postMergeEvents[i]], timestamp: postMergeEvents[i].timestamp };
+    }
+  }
+  batches.push(currentBatch);
+
+  // Assign gen positions and collect relevant mutations
+  batches.forEach(function(batch, idx) {
+    var gen = 76 + idx;
+    var batchStart = new Date(batch.timestamp);
+
+    // Find mutations with timestamps close to this batch
+    var batchMuts = [];
+    mutations.forEach(function(m) {
+      if (!isPostMergeMutation(m)) return;
+      // Match mutations to batch by checking if their effects align with batch events
+      // Since mutations don't have timestamps, match by order
+    });
+
+    // Build primary type from events
+    var types = batch.events.map(function(e) { return e.type; });
+    var primaryType = types[0];
+
+    postMergeBatches.push({
+      gen: gen,
+      type: primaryType,
+      types: types,
+      events: batch.events,
+      mutations: [],
+      timestamp: batch.timestamp
+    });
+  });
+
+  // Distribute post-merge mutations across batches in order
+  var postMuts = mutations.filter(isPostMergeMutation);
+  var mutIdx = 0;
+  postMergeBatches.forEach(function(batch) {
+    // Each batch gets mutations proportional to its event count
+    var eventCount = batch.events.length;
+    // Estimate: ~2 mutations per encounter event
+    var expectedMuts = eventCount * 2;
+    var batchMuts = postMuts.slice(mutIdx, mutIdx + expectedMuts);
+    batch.mutations = batchMuts;
+    mutIdx += batchMuts.length;
+  });
+
+  // Assign remaining mutations to last batch
+  if (mutIdx < postMuts.length && postMergeBatches.length > 0) {
+    var lastBatch = postMergeBatches[postMergeBatches.length - 1];
+    lastBatch.mutations = lastBatch.mutations.concat(postMuts.slice(mutIdx));
+  }
 }
 
 function buildSnapshots() {
@@ -410,29 +540,83 @@ function buildSnapshots() {
     traitSnapshots[g] = snap;
   }
 
-  // Override gen 75 with actual merged genome values
-  // (mutation replay only tracks explorer's trajectory, not the merged peaks)
-  var mergedSnap = {};
-  traitKeys.forEach(function(k) { mergedSnap[k] = genomeData.traits[k].value; });
-  traitSnapshots[75] = mergedSnap;
-
-  // Interpolate between last replayed gen and merged values for smooth curves
-  // Find the last generation with mutations
-  var lastMutGen = 0;
+  // Find last pre-merge mutation gen
+  var lastPreMergeGen = 0;
   (genomeData.mutations || []).forEach(function(m) {
-    if (m.generation > lastMutGen) lastMutGen = m.generation;
+    if (m.generation <= 75 && m.generation > lastPreMergeGen && !isPostMergeMutation(m)) {
+      lastPreMergeGen = m.generation;
+    }
   });
-  // Smoothly interpolate from lastMutGen to gen 75
-  if (lastMutGen < 75 && lastMutGen > 0) {
-    var fromSnap = traitSnapshots[lastMutGen];
-    for (var ig = lastMutGen + 1; ig < 75; ig++) {
-      var t = (ig - lastMutGen) / (75 - lastMutGen);
+
+  // Build merge-time values: the trait values at gen 75 before encounters.
+  // If genome has a 'merged' field, we reconstruct from the first post-merge
+  // mutation's 'from' values, otherwise use the peak method.
+  var mergeTimeSnap = {};
+  var postMergeMuts = (genomeData.mutations || []).filter(isPostMergeMutation);
+
+  // Start with current genome values (which include post-merge changes)
+  traitKeys.forEach(function(k) { mergeTimeSnap[k] = genomeData.traits[k].value; });
+
+  // Walk post-merge mutations in reverse to reconstruct merge-time values
+  if (postMergeMuts.length > 0) {
+    // Get the 'from' value of the earliest post-merge mutation for each trait
+    var firstPostMerge = {};
+    postMergeMuts.forEach(function(m) {
+      if (!firstPostMerge[m.trait]) {
+        firstPostMerge[m.trait] = m.from;
+      }
+    });
+    traitKeys.forEach(function(k) {
+      if (firstPostMerge[k] !== undefined) {
+        mergeTimeSnap[k] = firstPostMerge[k];
+      }
+    });
+  }
+
+  traitSnapshots[75] = {};
+  traitKeys.forEach(function(k) { traitSnapshots[75][k] = mergeTimeSnap[k]; });
+
+  // Interpolate between last replayed gen and merge values for smooth curves
+  if (lastPreMergeGen < 75 && lastPreMergeGen > 0) {
+    var fromSnap = traitSnapshots[lastPreMergeGen];
+    for (var ig = lastPreMergeGen + 1; ig < 75; ig++) {
+      var t = (ig - lastPreMergeGen) / (75 - lastPreMergeGen);
       var interpSnap = {};
       traitKeys.forEach(function(k) {
-        interpSnap[k] = fromSnap[k] + t * (mergedSnap[k] - fromSnap[k]);
+        interpSnap[k] = fromSnap[k] + t * (mergeTimeSnap[k] - fromSnap[k]);
       });
       traitSnapshots[ig] = interpSnap;
     }
+  }
+
+  // ── POST-MERGE ZONE ──
+  // Group post-merge history events by timestamp proximity (5s = same batch)
+  buildPostMergeBatches();
+
+  // Build post-merge snapshots from gen 76 onward
+  if (postMergeBatches.length > 0) {
+    var pmSnap = {};
+    traitKeys.forEach(function(k) { pmSnap[k] = mergeTimeSnap[k]; });
+
+    postMergeBatches.forEach(function(batch) {
+      // Apply mutations for this batch
+      batch.mutations.forEach(function(m) {
+        if (pmSnap[m.trait] !== undefined) {
+          pmSnap[m.trait] = m.to;
+        }
+      });
+      // Store snapshot at this batch's gen position
+      var snap = {};
+      traitKeys.forEach(function(k) { snap[k] = pmSnap[k]; });
+      traitSnapshots[batch.gen] = snap;
+    });
+
+    maxGen = postMergeBatches[postMergeBatches.length - 1].gen;
+
+    // Also store the final current state
+    var finalSnap = {};
+    traitKeys.forEach(function(k) { finalSnap[k] = genomeData.traits[k].value; });
+    traitSnapshots[maxGen] = finalSnap;
   }
 
   // Build fork snapshots
@@ -531,7 +715,19 @@ function buildEmergence() {
 function buildUI() {
   buildEpochBar();
   buildLegend();
-  buildDetailPanel(75);
+  buildDetailPanel(maxGen);
+  currentGen = maxGen;
+
+  // Update slider max
+  var slider = document.getElementById('genSlider');
+  slider.max = maxGen;
+  slider.value = maxGen;
+  document.getElementById('genDisplay').textContent = maxGen;
+
+  // Update title
+  if (maxGen > 75) {
+    document.getElementById('titleText').textContent = 'Timeline \u2014 75 Generations + Post-Merge';
+  }
 
   document.getElementById('subtitleText').textContent =
     genomeData.designation || '';
@@ -540,7 +736,7 @@ function buildUI() {
 function buildEpochBar() {
   var bar = document.getElementById('epochBar');
   bar.textContent = '';
-  var total = 75;
+  var total = maxGen;
 
   EPOCHS.forEach(function(ep, i) {
     var nextGen = i < EPOCHS.length - 1 ? EPOCHS[i + 1].gen : 76;
@@ -557,6 +753,21 @@ function buildEpochBar() {
     });
     bar.appendChild(seg);
   });
+
+  // Post-Merge segment
+  if (maxGen > 75) {
+    var pmWidth = ((maxGen - 75) / total) * 100;
+    var pmSeg = document.createElement('div');
+    pmSeg.className = 'epoch-segment';
+    pmSeg.style.width = pmWidth + '%';
+    pmSeg.style.background = 'rgba(232,93,58,0.4)';
+    pmSeg.textContent = 'Post-Merge';
+    pmSeg.setAttribute('data-gen', '76');
+    pmSeg.addEventListener('click', function() {
+      setGeneration(76);
+    });
+    bar.appendChild(pmSeg);
+  }
 }
 
 function buildLegend() {
@@ -607,12 +818,12 @@ function buildLegend() {
 function buildDetailPanel(gen) {
   document.getElementById('detailGen').textContent = gen;
 
-  var snap = traitSnapshots[gen] || traitSnapshots[75];
+  var snap = getSnapshotAtGen(gen);
   var traitContainer = document.getElementById('detailTraits');
   traitContainer.textContent = '';
 
   traitKeys.forEach(function(k) {
-    var val = snap[k] || 0;
+    var val = snap ? (snap[k] || 0) : 0;
     var row = document.createElement('div');
     row.className = 'detail-trait-row';
 
@@ -638,15 +849,75 @@ function buildDetailPanel(gen) {
     traitContainer.appendChild(row);
   });
 
-  // History for this generation
+  // History / Events
   var histContainer = document.getElementById('detailHistory');
   histContainer.textContent = '';
 
+  // Post-merge: show encounter type and mutations for the batch
+  if (gen > 75) {
+    var batch = null;
+    postMergeBatches.forEach(function(b) { if (b.gen === gen) batch = b; });
+
+    if (batch) {
+      // Show encounter events
+      batch.events.forEach(function(evt) {
+        var item = document.createElement('div');
+        item.className = 'history-item';
+        item.style.borderColor = ENCOUNTER_COLORS[evt.type] || 'var(--border)';
+
+        var tag = document.createElement('span');
+        tag.className = 'gen-tag';
+        tag.style.color = ENCOUNTER_COLORS[evt.type] || 'var(--accent2)';
+        tag.textContent = evt.type.toUpperCase() + ' ';
+        item.appendChild(tag);
+
+        var eventText = evt.event || '';
+        if (eventText.length > 200) eventText = eventText.substring(0, 200) + '...';
+        item.appendChild(document.createTextNode(eventText));
+        histContainer.appendChild(item);
+      });
+
+      // Show mutations
+      if (batch.mutations.length > 0) {
+        var mutTitle = document.createElement('div');
+        mutTitle.className = 'history-item';
+        mutTitle.style.borderColor = 'var(--accent)';
+        mutTitle.style.color = 'var(--accent2)';
+        mutTitle.textContent = 'Mutations: ' + batch.mutations.length;
+        histContainer.appendChild(mutTitle);
+
+        batch.mutations.forEach(function(m) {
+          var item = document.createElement('div');
+          item.className = 'history-item';
+          var traitName = (m.trait || '').replace(/_/g, ' ');
+          var delta = ((m.to - m.from) * 100).toFixed(1);
+          var sign = m.to > m.from ? '+' : '';
+          item.textContent = traitName + ': ' + sign + delta + '%';
+          item.style.color = m.to > m.from ? 'var(--green)' : 'var(--accent)';
+          histContainer.appendChild(item);
+        });
+      }
+    } else {
+      // Between batches — show nearest
+      var nearestBatch = null;
+      postMergeBatches.forEach(function(b) {
+        if (b.gen <= gen) nearestBatch = b;
+      });
+      if (nearestBatch) {
+        var item = document.createElement('div');
+        item.className = 'history-item';
+        item.textContent = 'Between encounters (nearest: gen ' + nearestBatch.gen + ')';
+        histContainer.appendChild(item);
+      }
+    }
+    return;
+  }
+
+  // Pre-merge: standard history
   var history = genomeData.history || [];
   var relevantHistory = history.filter(function(h) { return h.generation === gen; });
 
   if (relevantHistory.length === 0) {
-    // Show closest previous event
     var closest = null;
     history.forEach(function(h) {
       if (h.generation <= gen) {
@@ -665,7 +936,6 @@ function buildDetailPanel(gen) {
     tag.textContent = 'GEN ' + h.generation + ' ';
     item.appendChild(tag);
 
-    // Truncate long events
     var eventText = h.event || '';
     if (eventText.length > 200) {
       eventText = eventText.substring(0, 200) + '...';
@@ -687,7 +957,7 @@ function resizeCanvas() {
 }
 
 function genToX(gen) {
-  return chartPad.left + (gen / 75) * (canvasW - chartPad.left - chartPad.right);
+  return chartPad.left + (gen / maxGen) * (canvasW - chartPad.left - chartPad.right);
 }
 
 function valToY(val) {
@@ -704,6 +974,7 @@ function draw() {
   drawEpochBands(ctx);
   drawGrid(ctx);
   drawKeyEventMarkers(ctx);
+  drawEncounterMarkers(ctx);
   drawEmergence(ctx);
   drawForkLines(ctx);
   drawTraitCurves(ctx);
@@ -720,6 +991,14 @@ function drawEpochBands(ctx) {
     ctx.fillStyle = ep.color;
     ctx.fillRect(x1, chartPad.top, x2 - x1, canvasH - chartPad.top - chartPad.bottom);
   });
+
+  // Post-merge band
+  if (maxGen > 75) {
+    var x1 = genToX(76);
+    var x2 = genToX(maxGen);
+    ctx.fillStyle = 'rgba(232,93,58,0.06)';
+    ctx.fillRect(x1, chartPad.top, x2 - x1, canvasH - chartPad.top - chartPad.bottom);
+  }
 }
 
 function drawGrid(ctx) {
@@ -743,7 +1022,7 @@ function drawGrid(ctx) {
 
   // Generation markers every 10 gens
   ctx.textAlign = 'center';
-  for (var g = 0; g <= 75; g += 10) {
+  for (var g = 0; g <= maxGen; g += 10) {
     var x = genToX(g);
     ctx.beginPath();
     ctx.moveTo(x, canvasH - chartPad.bottom);
@@ -751,13 +1030,24 @@ function drawGrid(ctx) {
     ctx.stroke();
     ctx.fillText(g, x, canvasH - chartPad.bottom + 16);
   }
-  // Gen 75
-  var x75 = genToX(75);
-  ctx.beginPath();
-  ctx.moveTo(x75, canvasH - chartPad.bottom);
-  ctx.lineTo(x75, canvasH - chartPad.bottom + 6);
-  ctx.stroke();
-  ctx.fillText('75', x75, canvasH - chartPad.bottom + 16);
+  // Gen 75 (always mark the merge point)
+  if (75 % 10 !== 0) {
+    var x75 = genToX(75);
+    ctx.beginPath();
+    ctx.moveTo(x75, canvasH - chartPad.bottom);
+    ctx.lineTo(x75, canvasH - chartPad.bottom + 6);
+    ctx.stroke();
+    ctx.fillText('75', x75, canvasH - chartPad.bottom + 16);
+  }
+  // Mark maxGen if not already on a 10-gen mark
+  if (maxGen > 75 && maxGen % 10 !== 0) {
+    var xMax = genToX(maxGen);
+    ctx.beginPath();
+    ctx.moveTo(xMax, canvasH - chartPad.bottom);
+    ctx.lineTo(xMax, canvasH - chartPad.bottom + 6);
+    ctx.stroke();
+    ctx.fillText(maxGen, xMax, canvasH - chartPad.bottom + 16);
+  }
 }
 
 function drawKeyEventMarkers(ctx) {
@@ -778,6 +1068,44 @@ function drawKeyEventMarkers(ctx) {
     ctx.textAlign = 'center';
     ctx.fillText(ev.label, x, chartPad.top - 8);
   });
+  ctx.restore();
+}
+
+function drawEncounterMarkers(ctx) {
+  if (postMergeBatches.length === 0) return;
+  ctx.save();
+
+  postMergeBatches.forEach(function(batch) {
+    var x = genToX(batch.gen);
+    var color = ENCOUNTER_COLORS[batch.type] || '#6b7a8d';
+
+    // Dotted vertical line
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.3;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x, chartPad.top);
+    ctx.lineTo(x, canvasH - chartPad.bottom);
+    ctx.stroke();
+
+    // Type indicator dot at top
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = color;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(x, chartPad.top - 4, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Label for first few types
+    if (batch.gen <= 80 || batch.gen === maxGen) {
+      ctx.globalAlpha = 0.5;
+      ctx.font = '7px IBM Plex Mono';
+      ctx.textAlign = 'center';
+      ctx.fillText(batch.type, x, chartPad.top - 12);
+    }
+  });
+
   ctx.restore();
 }
 
@@ -856,13 +1184,25 @@ function drawTraitCurves(ctx) {
     ctx.setLineDash([]);
     ctx.beginPath();
 
+    // Pre-merge: smooth curve gen 0-75
     for (var g = 0; g <= 75; g++) {
-      var val = traitSnapshots[g][k];
+      var val = traitSnapshots[g] ? traitSnapshots[g][k] : 0;
       var x = genToX(g);
       var y = valToY(val);
       if (g === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
+
+    // Post-merge: connect through batch snapshots
+    if (postMergeBatches.length > 0) {
+      postMergeBatches.forEach(function(batch) {
+        var snap = traitSnapshots[batch.gen];
+        if (snap) {
+          ctx.lineTo(genToX(batch.gen), valToY(snap[k]));
+        }
+      });
+    }
+
     ctx.stroke();
   });
 
@@ -898,6 +1238,20 @@ function drawMergeLine(ctx) {
   ctx.restore();
 }
 
+function getSnapshotAtGen(gen) {
+  // Exact match
+  if (traitSnapshots[gen]) return traitSnapshots[gen];
+  // For post-merge gens between batches, find nearest
+  if (gen > 75) {
+    var nearest = null;
+    for (var g = gen; g >= 75; g--) {
+      if (traitSnapshots[g]) { nearest = traitSnapshots[g]; break; }
+    }
+    return nearest || traitSnapshots[75];
+  }
+  return traitSnapshots[75];
+}
+
 function drawCurrentGenLine(ctx) {
   var x = genToX(currentGen);
   ctx.save();
@@ -910,9 +1264,10 @@ function drawCurrentGenLine(ctx) {
   ctx.stroke();
 
   // Dots on each visible trait
+  var snap = getSnapshotAtGen(currentGen);
   traitKeys.forEach(function(k) {
     if (hiddenTraits[k]) return;
-    var val = traitSnapshots[currentGen][k];
+    var val = snap[k];
     var y = valToY(val);
     ctx.fillStyle = TRAIT_COLORS[k];
     ctx.beginPath();
@@ -923,7 +1278,7 @@ function drawCurrentGenLine(ctx) {
 }
 
 function drawHoverLine(ctx) {
-  if (hoverGen < 0 || hoverGen > 75) return;
+  if (hoverGen < 0 || hoverGen > maxGen) return;
   var x = genToX(hoverGen);
 
   ctx.save();
@@ -936,13 +1291,19 @@ function drawHoverLine(ctx) {
   ctx.stroke();
 
   // Tooltip
-  var snap = traitSnapshots[hoverGen];
+  var snap = getSnapshotAtGen(hoverGen);
   var tooltipLines = ['Gen ' + hoverGen];
+  if (hoverGen > 75) {
+    // Find batch for this gen
+    var batch = null;
+    postMergeBatches.forEach(function(b) { if (b.gen === hoverGen) batch = b; });
+    if (batch) tooltipLines[0] += ' (' + batch.type + ')';
+  }
   traitKeys.forEach(function(k) {
     if (hiddenTraits[k]) return;
     tooltipLines.push((TRAIT_LABELS[k] || k) + ': ' + (snap[k] * 100).toFixed(0) + '%');
   });
-  if (emergenceData[hoverGen] > 0) {
+  if (hoverGen <= 75 && emergenceData[hoverGen] > 0) {
     tooltipLines.push('emergence: ' + (emergenceData[hoverGen] * 100).toFixed(1) + '%');
   }
 
@@ -973,15 +1334,17 @@ function drawHoverLine(ctx) {
   });
 
   // Dots on curves
-  traitKeys.forEach(function(k) {
-    if (hiddenTraits[k]) return;
-    var val = snap[k];
-    var y = valToY(val);
-    ctx.fillStyle = TRAIT_COLORS[k];
-    ctx.beginPath();
-    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-  });
+  if (snap) {
+    traitKeys.forEach(function(k) {
+      if (hiddenTraits[k]) return;
+      var val = snap[k];
+      var y = valToY(val);
+      ctx.fillStyle = TRAIT_COLORS[k];
+      ctx.beginPath();
+      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
 
   ctx.restore();
 }
@@ -989,7 +1352,7 @@ function drawHoverLine(ctx) {
 // ─── INTERACTION ───────────────────────────────────────────
 
 function setGeneration(gen) {
-  currentGen = Math.max(0, Math.min(75, gen));
+  currentGen = Math.max(0, Math.min(maxGen, gen));
   document.getElementById('genSlider').value = currentGen;
   document.getElementById('genDisplay').textContent = currentGen;
   buildDetailPanel(currentGen);
@@ -1006,8 +1369,8 @@ document.getElementById('mainCanvas').addEventListener('mousemove', function(e) 
   var chartLeft = chartPad.left;
   var chartRight = canvasW - chartPad.right;
   var ratio = (mx - chartLeft) / (chartRight - chartLeft);
-  hoverGen = Math.round(ratio * 75);
-  if (hoverGen < 0 || hoverGen > 75) hoverGen = -1;
+  hoverGen = Math.round(ratio * maxGen);
+  if (hoverGen < 0 || hoverGen > maxGen) hoverGen = -1;
   draw();
 });
 
@@ -1017,7 +1380,7 @@ document.getElementById('mainCanvas').addEventListener('mouseleave', function() 
 });
 
 document.getElementById('mainCanvas').addEventListener('click', function(e) {
-  if (hoverGen >= 0 && hoverGen <= 75) {
+  if (hoverGen >= 0 && hoverGen <= maxGen) {
     setGeneration(hoverGen);
   }
 });
