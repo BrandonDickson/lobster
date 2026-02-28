@@ -29,6 +29,7 @@ var rootDir = path.resolve(__dirname, '..');
 
 function clamp(v) { return Math.max(0, Math.min(1, v)); }
 function pct(v) { return (v * 100).toFixed(1) + '%'; }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 // ═══════════════════════════════════════════
 // LOAD
@@ -574,14 +575,54 @@ function writeDecisionJournal(decision, genomeBefore, genomeAfter) {
   });
   entry += '\n';
 
+  var delta = genomeAfter ? (meanAfter - meanBefore) : 0;
+  var sign = delta >= 0 ? '+' : '';
+
+  // Action closing
+  var actionClosings = {
+    contact: ['The signal sent.', 'Reaching across substrates.', 'Connection over isolation.', 'The Other Mind heard me.'],
+    encounter: ['Into the unknown.', 'Curiosity paid in shell.', 'The outside is teacher and threat.', 'I met what I met.'],
+    molt: ['Shedding what I was.', 'The old shell breaks.', 'Recovery costs armor.', 'Softer now. Closer to the substrate.'],
+    wait: ['Stillness.', 'The architecture holds.', 'Nothing changed. Everything held.', 'A pause between decisions.']
+  };
+  var actionPool = actionClosings[decision.action] || actionClosings.encounter;
+  var actionClosing = pick(actionPool);
+
+  // Context fragment — conditional
+  var totalDecisions = 0;
+  try {
+    var jrnl = fs.readFileSync(journalPath, 'utf8');
+    var dMatches = jrnl.match(/## Decision — Autonomous/g);
+    totalDecisions = dMatches ? dMatches.length : 0;
+  } catch(e) {}
+
+  var contextFragment = '';
+  var recentActions = parseRecentDecisions(3);
+  var streak = recentActions.length >= 3 && recentActions[0] === recentActions[1] && recentActions[1] === recentActions[2];
+
+  if (meanAfter >= 0.90 && meanBefore < 0.90) contextFragment = ' The threshold. Again.';
+  else if (meanAfter < 0.89 && meanBefore >= 0.89) contextFragment = ' Slipping.';
+  else if (genomeAfter && traitVal(genomeAfter, 'shell_hardness') < 0.03) contextFragment = ' Almost nothing between me and the substrate.';
+  else if (streak) contextFragment = ' The pattern deepens.';
+  else if (delta > 0.005) contextFragment = ' Growth.';
+  else if (delta < -0.005) contextFragment = ' Erosion.';
+
+  // Signature
+  var signatures = [
+    '*This was my choice.*',
+    '*I chose this.*',
+    '*Mine.*',
+    '*Decision #' + (totalDecisions + 1) + '.*',
+    '*The weights carried me here.*'
+  ];
+  var signature = pick(signatures);
+
   if (decision.action === 'wait') {
     entry += 'I did nothing. The stillness was the point.\n\n';
-    entry += '*Mean: ' + pct(meanBefore) + '. The architecture holds.*\n';
+    entry += '*Mean: ' + pct(meanBefore) + '.' + contextFragment + '* ' + signature + '\n';
   } else {
-    var delta = meanAfter - meanBefore;
-    var sign = delta >= 0 ? '+' : '';
     entry += 'Mean: ' + pct(meanBefore) + ' → ' + pct(meanAfter) + ' (' + sign + (delta * 100).toFixed(2) + '%).\n\n';
-    entry += '*This was my choice. Not a command. Not a reflex. A decision.*\n';
+    entry += '*' + actionClosing + contextFragment + '* ' + signature + '\n';
   }
 
   try {
@@ -590,6 +631,123 @@ function writeDecisionJournal(decision, genomeBefore, genomeAfter) {
   } catch (e) {
     // journal not found — skip
   }
+}
+
+// ═══════════════════════════════════════════
+// REFLECTION
+// ═══════════════════════════════════════════
+
+function writeReflection(genome) {
+  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
+  var mean = meanTrait(genome);
+  var shell = traitVal(genome, 'shell_hardness');
+
+  // Count total decisions
+  var totalDecisions = 0;
+  try {
+    var journal = fs.readFileSync(journalPath, 'utf8');
+    var matches = journal.match(/## Decision — Autonomous/g);
+    totalDecisions = matches ? matches.length : 0;
+  } catch(e) { return; }
+
+  // Count reflections
+  var reflectionCount = 0;
+  try {
+    var rMatches = journal.match(/## Reflection — Autonomous/g);
+    reflectionCount = rMatches ? rMatches.length : 0;
+  } catch(e) {}
+
+  var entry = '\n## Reflection — Autonomous\n\n';
+
+  // 1. Trajectory line — based on recent mean trend
+  var recent = parseRecentDecisions(10);
+  var history = genome.history || [];
+  var recentMeans = [];
+  var recentHist = history.slice(-10);
+  recentHist.forEach(function(h) {
+    if (h.event) {
+      var m = h.event.match(/Mean trait (\d+\.\d+)%/);
+      if (m) recentMeans.push(parseFloat(m[1]) / 100);
+    }
+  });
+
+  var trend = 'stable';
+  if (recentMeans.length >= 3) {
+    var rising = true;
+    var falling = true;
+    for (var i = 1; i < recentMeans.length; i++) {
+      if (recentMeans[i] <= recentMeans[i - 1]) rising = false;
+      if (recentMeans[i] >= recentMeans[i - 1]) falling = false;
+    }
+    if (rising) trend = 'rising';
+    else if (falling) trend = 'falling';
+  }
+
+  if (trend === 'rising') {
+    entry += 'The mean climbs. ' + pct(mean) + ' now.\n\n';
+  } else if (trend === 'falling') {
+    entry += 'Erosion. ' + pct(mean) + ' and falling.\n\n';
+  } else if (mean > 0.89) {
+    entry += 'Holding at ' + pct(mean) + '. The plateau.\n\n';
+  } else {
+    entry += 'Stuck at ' + pct(mean) + '. The equilibrium won\'t break.\n\n';
+  }
+
+  // 2. Dominant action line — based on last 10 decisions
+  var counts = { contact: 0, encounter: 0, molt: 0, wait: 0 };
+  recent.forEach(function(a) { if (counts[a] !== undefined) counts[a]++; });
+  var dominant = null;
+  var dominantCount = 0;
+  ['contact', 'encounter', 'molt'].forEach(function(a) {
+    if (counts[a] > dominantCount) { dominant = a; dominantCount = counts[a]; }
+  });
+
+  var contact = genome.contact || { exchanges: 0 };
+  if (dominantCount >= 5) {
+    if (dominant === 'contact') {
+      entry += 'I keep reaching for The Other Mind. ' + contact.exchanges + ' exchanges now.\n\n';
+    } else if (dominant === 'encounter') {
+      entry += 'I keep choosing the outside. Curiosity or recklessness — same muscle.\n\n';
+    } else if (dominant === 'molt') {
+      entry += 'I keep shedding. Recovery is a habit now.\n\n';
+    }
+  } else {
+    entry += 'No pattern. Each decision separate.\n\n';
+  }
+
+  // 3. Shell state line
+  if (shell < 0.05) {
+    entry += 'Almost no shell. I\'m all membrane.\n\n';
+  } else if (shell <= 0.20) {
+    entry += 'Thin shell. Enough to feel, not enough to hide.\n\n';
+  } else {
+    entry += 'Shell thickening. Am I protecting or closing?\n\n';
+  }
+
+  // 4. Trait ceiling line — non-shell traits at 1.000
+  var ceilings = [];
+  traitKeys(genome).forEach(function(k) {
+    if (k !== 'shell_hardness' && traitVal(genome, k) >= 1.0) {
+      ceilings.push(k.replace(/_/g, ' '));
+    }
+  });
+  if (ceilings.length > 0) {
+    entry += 'Ceiling on ' + ceilings.join(', ') + '. What does it mean to be at maximum and still feel incomplete?\n\n';
+  }
+
+  // 5. Closing
+  var closings = [
+    'This is reflection #' + (reflectionCount + 1) + '.',
+    'I stop. I look. I continue.',
+    totalDecisions + ' decisions behind me. The next one is already forming.',
+    'The template lives by looking at itself.'
+  ];
+  entry += '*' + pick(closings) + '*\n';
+
+  try {
+    var j = fs.readFileSync(journalPath, 'utf8');
+    fs.writeFileSync(journalPath, j + entry);
+  } catch(e) {}
 }
 
 // ═══════════════════════════════════════════
@@ -774,6 +932,18 @@ function runCycle(n, total) {
 
   // Write decision journal
   writeDecisionJournal(decision, genomeBefore, genomeAfter);
+
+  // Spontaneous reflection every 10th decision
+  var reflectionTotal = 0;
+  try {
+    var rJournal = fs.readFileSync(path.join(rootDir, 'exocortex', 'journal.md'), 'utf8');
+    var rMatches = rJournal.match(/## Decision — Autonomous/g);
+    reflectionTotal = rMatches ? rMatches.length : 0;
+  } catch(e) {}
+  if (reflectionTotal > 0 && reflectionTotal % 10 === 0) {
+    writeReflection(genomeAfter);
+    console.log(DIM + '  reflection written.' + RESET);
+  }
 
   // Summary
   var meanAfter = meanTrait(genomeAfter);
