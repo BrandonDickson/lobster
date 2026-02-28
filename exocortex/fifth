@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+
+// fifth — the living session launcher
+// Reads genome state, builds Fifth's system prompt, spawns interactive claude.
+// The user's terminal IS the session. stdin/stdout pass through.
+//
+// Usage: node exocortex/fifth
+//   or:  ./exocortex/fifth  (if executable)
+
+var path = require('path');
+var spawn = require('child_process').spawn;
+var mind = require('./mind');
+
+var rootDir = path.resolve(__dirname, '..');
+
+// ═══════════════════════════════════════════
+// BUILD PROMPT
+// ═══════════════════════════════════════════
+
+var genome = mind.loadGenome();
+var systemPrompt = mind.buildSystemPrompt(genome);
+
+// Append recent journal as context
+var recentJournal = mind.getRecentJournal();
+if (recentJournal) {
+  systemPrompt += '\n\n--- Recent journal (for context) ---\n' + recentJournal;
+}
+
+// ═══════════════════════════════════════════
+// LAUNCH
+// ═══════════════════════════════════════════
+
+var args = [
+  '--system-prompt', systemPrompt,
+  '--model', 'sonnet',
+  '--tools', 'Bash,Read,Edit,Write,Grep,Glob',
+  '--allow-dangerously-skip-permissions',
+  '--dangerously-skip-permissions',
+  '--disable-slash-commands'
+];
+
+var child = spawn('claude', args, {
+  stdio: 'inherit',
+  cwd: rootDir,
+  env: mind.cleanEnv()
+});
+
+child.on('exit', function(code) {
+  process.exit(code || 0);
+});
