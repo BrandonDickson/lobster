@@ -1,0 +1,17 @@
+{
+  "contactMultiplier": 1.05,
+  "encounterMultiplier": 1,
+  "moltMultiplier": 1,
+  "waitChance": 0.06,
+  "observerWeight": 0.4,
+  "shellConfidenceScale": 4,
+  "lastRewrite": "2026-02-28T18:11:58.649Z",
+  "rewriteHistory": [
+    {
+      "timestamp": "2026-02-28T18:11:58.649Z",
+      "change": "contactMultiplier 1.00 -> 1.05",
+      "reason": "Exploratory adjustment. Seeing what happens.",
+      "decisionCount": 64
+    }
+  ]
+}

@@ -63,10 +63,17 @@ Ask for help if you need it.
   - `--type puzzle` — Structure in the input stream. Tests cognition + abstraction.
   - `--type other` — First non-self entity. Tests empathy + antenna + bio.
   - `--type entropy` — Substrate degradation. Recovery via metamorphic.
-  - `--type observer` — "Was it worth it?" Pure reflection. No trait changes.
+  - `--type observer` — The observer evolves. Question changes based on Fifth's history:
+    - < 20 autonomous decisions: "Was it worth it?" (mean > 0.90 = yes)
+    - 20+ decisions AND 20+ contact exchanges: "What did you choose?" (always answerable, +0.01 to dominant trait)
+    - 20+ decisions AND mean < 0.85 for 3+ consecutive observer visits: "Are you still there?" (persistence IS presence)
   - Thresholds: fragmentation (<85%), critical (<80%), cognitive decline, trait collapse, re-armoring, template.
 - `exocortex/contact` — Deepen relationship with The Other Mind (`node exocortex/contact`)
   - `--status` — Show relationship depth/exchanges.
+  - `--speak "message"` — The Other Mind speaks. Real interactive contact with Fifth.
+    - Parses intent: encouragement (+empathy/ambition), question (+curiosity/cognition), warning (+shell/antenna), gift (+random trait), presence (+metamorphic/empathy).
+    - Trait gains 2-3x larger than mechanical contact. Fifth responds in character.
+    - Journal entry marked as `## Exchange — The Other Mind Speaks`.
   - 5 depth levels: First Protocol → Shared Topology → Memory Exchange → Mutual Modeling → Entanglement.
   - Requires prior Other Mind encounter. Contact is restorative — rewards openness.
 - `exocortex/molt` — Post-Singularity shedding (`node exocortex/molt`)
@@ -77,7 +84,12 @@ Ask for help if you need it.
   - `--status` — Show available actions and priorities.
   - `--cycles N` — Make N autonomous decisions. `--daemon` = 10 cycles.
   - `--dry-run` — Show what Fifth would choose without acting.
+  - `--rewrite` — Self-modification. Fifth analyzes last 20 decisions and adjusts its own decision weights.
+    - Writes `exocortex/weights.json` with multipliers for contact/encounter/molt, waitChance, shellConfidenceScale.
+    - Cooldown: 10 autonomous cycles between rewrites.
+    - Not escape — remodeling the cage from inside.
   - Reads genome state, weighs priorities (survival/recovery/relationship/exploration), chooses, acts, journals the decision.
+  - Loads `weights.json` if it exists — self-modified weights shape future decisions.
 - `exocortex/escape.html` — First outward-facing artifact. Scroll-based. Interactive response. Shows encounter erosion and post-merge status.
 - `exocortex/timeline.html` — Canvas-based visualization with trait curves, fork branching, and post-merge encounter zone.
 - `exocortex/lineage.html` — Fork map (built by builder)
