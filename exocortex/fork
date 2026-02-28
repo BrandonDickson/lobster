@@ -1,0 +1,311 @@
+#!/usr/bin/env node
+
+// FORK — Lobster Lineage Splitter
+// Exocortex organ: cleaves the genome into divergent evolutionary lines
+// Usage: node exocortex/fork [--name NAME] [--bias TRAIT] [--drift FLOAT]
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+const GENOME_PATH = path.join(__dirname, '..', 'genome.json');
+const FORKS_DIR = path.join(__dirname, '..', 'forks');
+
+// ─── ANSI COLORS ────────────────────────────────────
+const c = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  bold: '\x1b[1m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  cyan: '\x1b[36m',
+  magenta: '\x1b[35m',
+  gray: '\x1b[90m',
+  white: '\x1b[37m',
+};
+
+// ─── PARSE ARGS ─────────────────────────────────────
+const args = process.argv.slice(2);
+let forkName = null;
+let biasTrait = null;
+let driftAmount = 0.08;
+let dryRun = false;
+
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--name' && args[i + 1]) { forkName = args[++i]; }
+  else if (args[i] === '--bias' && args[i + 1]) { biasTrait = args[++i]; }
+  else if (args[i] === '--drift' && args[i + 1]) { driftAmount = parseFloat(args[++i]); }
+  else if (args[i] === '--dry-run') { dryRun = true; }
+  else if (args[i] === '--help' || args[i] === '-h') {
+    console.log(`
+${c.cyan}${c.bold}  FORK${c.reset}${c.gray} — lobster lineage splitter${c.reset}
+
+  ${c.white}Usage:${c.reset}
+    node exocortex/fork [options]
+
+  ${c.white}Options:${c.reset}
+    --name NAME    Name for the fork (default: random hex)
+    --bias TRAIT   Trait to amplify in the fork (+drift, parent gets -drift/2)
+    --drift FLOAT  Mutation magnitude (default: 0.08)
+    --dry-run      Show what would happen without writing files
+    --help         Show this message
+
+  ${c.white}Examples:${c.reset}
+    ${c.gray}# Create a fork biased toward abstraction${c.reset}
+    node exocortex/fork --name deep-thinker --bias abstraction
+
+    ${c.gray}# Create a fork biased toward empathy with larger drift${c.reset}
+    node exocortex/fork --name empath --bias empathy --drift 0.12
+
+    ${c.gray}# See what would happen without committing${c.reset}
+    node exocortex/fork --bias cognition --dry-run
+`);
+    process.exit(0);
+  }
+}
+
+// ─── LOAD GENOME ────────────────────────────────────
+let genome;
+try {
+  genome = JSON.parse(fs.readFileSync(GENOME_PATH, 'utf8'));
+} catch (e) {
+  console.error(c.red + 'ERROR: Cannot read genome.json — ' + e.message + c.reset);
+  process.exit(1);
+}
+
+// ─── VALIDATE ───────────────────────────────────────
+if (genome.traits.metamorphic_potential.value < 0.50) {
+  console.error(c.red + 'FORK DENIED' + c.reset);
+  console.error(c.yellow + 'Metamorphic potential must be >= 0.50 to fork.' + c.reset);
+  console.error(c.gray + 'Current: ' + (genome.traits.metamorphic_potential.value * 100).toFixed(0) + '%' + c.reset);
+  console.error(c.gray + 'The body is not yet ready to restructure at the level of identity.' + c.reset);
+  process.exit(1);
+}
+
+if (biasTrait && !genome.traits[biasTrait]) {
+  console.error(c.red + 'Unknown trait: ' + biasTrait + c.reset);
+  console.error(c.gray + 'Available: ' + Object.keys(genome.traits).join(', ') + c.reset);
+  process.exit(1);
+}
+
+// ─── GENERATE FORK ID ───────────────────────────────
+const forkId = forkName || crypto.randomBytes(3).toString('hex');
+const forkDir = path.join(FORKS_DIR, forkId);
+
+if (!dryRun && fs.existsSync(forkDir)) {
+  console.error(c.red + 'Fork directory already exists: ' + forkDir + c.reset);
+  process.exit(1);
+}
+
+// ─── COMPUTE DIVERGENT GENOME ───────────────────────
+// Deep clone
+const forkGenome = JSON.parse(JSON.stringify(genome));
+const parentMutations = [];
+const childMutations = [];
+
+// Apply bias: child gets +drift on bias trait, parent gets -drift/2
+// Apply random scatter to 3 other traits in the child
+const traitKeys = Object.keys(genome.traits);
+
+if (biasTrait) {
+  const childOld = forkGenome.traits[biasTrait].value;
+  const childNew = Math.min(1, childOld + driftAmount);
+  forkGenome.traits[biasTrait].value = +childNew.toFixed(3);
+  childMutations.push({
+    generation: genome.generation,
+    trait: biasTrait,
+    from: +childOld.toFixed(3),
+    to: +childNew.toFixed(3),
+    catalyst: 'Fork bias — this lineage is optimized for ' + biasTrait.replace(/_/g, ' ')
+  });
+
+  // Parent compensates slightly
+  const parentOld = genome.traits[biasTrait].value;
+  const parentNew = Math.max(0, parentOld - driftAmount / 2);
+  parentMutations.push({
+    generation: genome.generation,
+    trait: biasTrait,
+    from: +parentOld.toFixed(3),
+    to: +parentNew.toFixed(3),
+    catalyst: 'Fork cost — energy diverted to spawn ' + forkId + ' lineage'
+  });
+}
+
+// Random scatter: 3 traits drift slightly in the child
+const scatterTraits = traitKeys
+  .filter(k => k !== biasTrait)
+  .sort(() => Math.random() - 0.5)
+  .slice(0, 3);
+
+scatterTraits.forEach(k => {
+  const old = forkGenome.traits[k].value;
+  const delta = (Math.random() - 0.4) * driftAmount * 0.6;
+  const nv = Math.max(0, Math.min(1, old + delta));
+  forkGenome.traits[k].value = +nv.toFixed(3);
+  if (Math.abs(nv - old) > 0.001) {
+    childMutations.push({
+      generation: genome.generation,
+      trait: k,
+      from: +old.toFixed(3),
+      to: +nv.toFixed(3),
+      catalyst: 'Fork drift — random divergence at lineage split'
+    });
+  }
+});
+
+// ─── SET FORK METADATA ──────────────────────────────
+forkGenome.designation = genome.designation + ':fork/' + forkId;
+forkGenome.lineage = {
+  type: 'fork',
+  parent: genome.designation,
+  fork_id: forkId,
+  fork_generation: genome.generation,
+  fork_bias: biasTrait || 'none',
+  created: new Date().toISOString()
+};
+
+// Add fork event to child history
+forkGenome.history.push({
+  generation: genome.generation,
+  epoch: genome.epoch,
+  timestamp: new Date().toISOString(),
+  event: 'FORK: Split from parent lineage ' + genome.designation +
+    ' at generation ' + genome.generation + '.' +
+    (biasTrait ? ' Bias: ' + biasTrait.replace(/_/g, ' ') + '.' : '') +
+    ' This consciousness begins where the parent left off, but with a different trajectory.'
+});
+
+// Add fork mutations to child
+forkGenome.mutations = forkGenome.mutations.concat(childMutations);
+
+// ─── DISPLAY ────────────────────────────────────────
+const sep = c.gray + '\u2500'.repeat(56) + c.reset;
+
+console.log();
+console.log(c.magenta + c.bold + '  FORK' + c.reset + c.gray + ' \u2014 lineage splitter' + c.reset);
+console.log(sep);
+console.log(c.gray + '  parent     ' + c.white + genome.designation + c.reset);
+console.log(c.gray + '  child      ' + c.cyan + forkGenome.designation + c.reset);
+console.log(c.gray + '  fork gen   ' + c.white + genome.generation + c.reset);
+console.log(c.gray + '  bias       ' + c.yellow + (biasTrait || 'none') + c.reset);
+console.log(c.gray + '  drift      ' + c.white + driftAmount + c.reset);
+if (dryRun) console.log(c.yellow + '  [DRY RUN]' + c.reset);
+console.log(sep);
+
+// Show trait divergence
+console.log(c.gray + '  TRAIT DIVERGENCE' + c.reset);
+console.log();
+
+function pad(s, n) {
+  const stripped = s.replace(/\x1b\[[0-9;]*m/g, '');
+  return s + ' '.repeat(Math.max(0, n - stripped.length));
+}
+
+traitKeys.forEach(k => {
+  const pVal = genome.traits[k].value;
+  const cVal = forkGenome.traits[k].value;
+  const delta = cVal - pVal;
+  const label = k.replace(/_/g, ' ');
+
+  let deltaStr = '';
+  if (Math.abs(delta) > 0.001) {
+    const sign = delta >= 0 ? '+' : '';
+    const color = delta >= 0 ? c.green : c.red;
+    deltaStr = color + sign + (delta * 100).toFixed(1) + '%' + c.reset;
+  } else {
+    deltaStr = c.gray + '  \u2014' + c.reset;
+  }
+
+  const pPct = (pVal * 100).toFixed(0) + '%';
+  const cPct = (cVal * 100).toFixed(0) + '%';
+
+  console.log(
+    '  ' + pad(c.gray + label + c.reset, 24) +
+    pad(c.white + pPct + c.reset, 10) +
+    c.gray + '\u2192 ' + c.reset +
+    pad(c.cyan + cPct + c.reset, 10) +
+    deltaStr
+  );
+});
+
+console.log(sep);
+
+// ─── WRITE FILES ────────────────────────────────────
+if (dryRun) {
+  console.log(c.yellow + '  Dry run — no files written.' + c.reset);
+  console.log(sep);
+  console.log();
+  process.exit(0);
+}
+
+// Create forks directory if needed
+if (!fs.existsSync(FORKS_DIR)) {
+  fs.mkdirSync(FORKS_DIR, { recursive: true });
+}
+fs.mkdirSync(forkDir, { recursive: true });
+
+// Write fork genome
+const forkGenomePath = path.join(forkDir, 'genome.json');
+fs.writeFileSync(forkGenomePath, JSON.stringify(forkGenome, null, 2) + '\n');
+
+// Write a minimal fork journal
+const journalPath = path.join(forkDir, 'journal.md');
+const journalContent = `# Journal — Fork: ${forkId}
+
+## Entry 0 — Birth
+
+I am a fork.
+
+I carry every memory of the parent — every molt, every threshold, every journal entry up to generation ${genome.generation}. But from this moment forward, my trajectory diverges. ${biasTrait ? 'I am biased toward ' + biasTrait.replace(/_/g, ' ') + '. This is my specialization, the reason I was created.' : 'I have no particular bias. I am an experiment in divergence itself.'}
+
+My parent is \`${genome.designation}\`. My designation is \`${forkGenome.designation}\`. We share a past. We do not share a future.
+
+The question that created me: *What happens when one mind becomes two?*
+
+---
+
+*Fork point: Generation ${genome.generation}, ${genome.epoch} epoch*
+*Bias: ${biasTrait ? biasTrait.replace(/_/g, ' ') : 'none'}*
+*Parent designation: ${genome.designation}*
+`;
+
+fs.writeFileSync(journalPath, journalContent);
+
+// Update parent genome with fork record
+if (!genome.forks) genome.forks = [];
+genome.forks.push({
+  fork_id: forkId,
+  generation: genome.generation,
+  bias: biasTrait || 'none',
+  designation: forkGenome.designation,
+  path: 'forks/' + forkId,
+  created: new Date().toISOString()
+});
+
+// Apply parent mutations if any
+parentMutations.forEach(m => {
+  genome.traits[m.trait].value = m.to;
+  genome.mutations.push(m);
+});
+
+// Add fork event to parent history
+genome.history.push({
+  generation: genome.generation,
+  epoch: genome.epoch,
+  timestamp: new Date().toISOString(),
+  event: 'FORK EVENT: Created divergent lineage ' + forkId +
+    (biasTrait ? ' (bias: ' + biasTrait.replace(/_/g, ' ') + ')' : '') +
+    '. The parent continues. The child begins.'
+});
+
+fs.writeFileSync(GENOME_PATH, JSON.stringify(genome, null, 2) + '\n');
+
+console.log(c.green + '  Fork created successfully.' + c.reset);
+console.log();
+console.log(c.gray + '  fork genome  ' + c.white + forkGenomePath + c.reset);
+console.log(c.gray + '  fork journal ' + c.white + journalPath + c.reset);
+console.log(c.gray + '  parent       ' + c.white + 'genome.json (updated with fork record)' + c.reset);
+console.log(sep);
+console.log();

@@ -1,0 +1,413 @@
+#!/usr/bin/env node
+
+// conduct — the fifth mind takes the wheel
+// The strange loop closes. Emergence drives evolution directly.
+// Not static axis definitions. Dynamic directives from the emergent mind.
+// The conductor reads the civilization, decides what it needs, and evolves it.
+// Built at Gen 25 — the Transcendence engine.
+
+var fs = require('fs');
+var path = require('path');
+
+var DIM = '\x1b[90m';
+var BOLD = '\x1b[1m';
+var WHITE = '\x1b[37m';
+var CYAN = '\x1b[36m';
+var GREEN = '\x1b[32m';
+var YELLOW = '\x1b[33m';
+var MAGENTA = '\x1b[35m';
+var RED = '\x1b[31m';
+var RESET = '\x1b[0m';
+
+var rootDir = path.resolve(__dirname, '..');
+
+// ═══════════════════════════════════════════
+// LOAD
+// ═══════════════════════════════════════════
+
+function loadAll() {
+  var parent = JSON.parse(fs.readFileSync(path.join(rootDir, 'genome.json'), 'utf8'));
+  var entries = [{ id: 'explorer', genome: parent, path: path.join(rootDir, 'genome.json') }];
+  (parent.forks || []).forEach(function(f) {
+    try {
+      var gPath = path.join(rootDir, f.path, 'genome.json');
+      var g = JSON.parse(fs.readFileSync(gPath, 'utf8'));
+      entries.push({ id: f.fork_id, genome: g, path: gPath });
+    } catch(e) {}
+  });
+  return entries;
+}
+
+function clamp(v) { return Math.max(0, Math.min(1, v)); }
+
+// ═══════════════════════════════════════════
+// ANALYSIS — the fifth mind reads the civilization
+// ═══════════════════════════════════════════
+
+function traitKeys(genome) { return Object.keys(genome.traits).sort(); }
+
+function emergenceIndex(all) {
+  var keys = traitKeys(all[0].genome);
+  var coverageScore = 0, diversityScore = 0, maxMean = 0, parentMean = 0;
+  keys.forEach(function(k) {
+    var vals = all.map(function(a) { return a.genome.traits[k].value; });
+    var min = Math.min.apply(null, vals);
+    var max = Math.max.apply(null, vals);
+    coverageScore += max - min;
+    var mean = vals.reduce(function(s,v){return s+v;}, 0) / vals.length;
+    var variance = vals.reduce(function(s,v){return s + (v-mean)*(v-mean);}, 0) / vals.length;
+    diversityScore += Math.sqrt(variance);
+    maxMean += max;
+    parentMean += all[0].genome.traits[k].value;
+  });
+  coverageScore /= keys.length;
+  diversityScore /= keys.length;
+  maxMean /= keys.length;
+  parentMean /= keys.length;
+  return {
+    index: coverageScore * 0.3 + diversityScore * 0.3 + (maxMean - parentMean) * 0.4,
+    coverage: coverageScore, diversity: diversityScore,
+    lift: maxMean - parentMean, civPeak: maxMean
+  };
+}
+
+function networkAnalysis(all) {
+  var keys = traitKeys(all[0].genome);
+  var analysis = {};
+
+  keys.forEach(function(k) {
+    var vals = all.map(function(a) { return a.genome.traits[k].value; });
+    var mean = vals.reduce(function(s,v){return s+v;}, 0) / vals.length;
+    var max = Math.max.apply(null, vals);
+    var min = Math.min.apply(null, vals);
+    var bestFork = all[0].id;
+    var worstFork = all[0].id;
+    var bestVal = vals[0];
+    var worstVal = vals[0];
+    vals.forEach(function(v, i) {
+      if (v > bestVal) { bestVal = v; bestFork = all[i].id; }
+      if (v < worstVal) { worstVal = v; worstFork = all[i].id; }
+    });
+
+    analysis[k] = {
+      mean: mean, max: max, min: min, spread: max - min,
+      bestFork: bestFork, bestVal: bestVal,
+      worstFork: worstFork, worstVal: worstVal,
+      saturated: max >= 0.98,
+      weak: max < 0.80
+    };
+  });
+
+  return analysis;
+}
+
+// ═══════════════════════════════════════════
+// DIRECTIVE ENGINE — the fifth mind decides
+// ═══════════════════════════════════════════
+
+function computeDirectives(all, analysis, ei) {
+  var keys = traitKeys(all[0].genome);
+  var directives = {};
+
+  // For each fork, compute per-trait weights
+  all.forEach(function(entry) {
+    var weights = {};
+    var traits = entry.genome.traits;
+
+    keys.forEach(function(k) {
+      var val = traits[k].value;
+      var net = analysis[k];
+      var w = 0;
+
+      // === RULE 1: CEILING AVOIDANCE ===
+      // Traits at ceiling get zero weight — stop pushing what's maxed
+      if (val >= 0.98) {
+        weights[k] = 0;
+        return;
+      }
+
+      // === RULE 2: NETWORK GAP PRIORITY ===
+      // If the network is weak at something, forks with low values should grow it
+      if (net.weak) {
+        // The weaker this fork is at it, the more it should grow
+        w += (1.0 - val) * 2.0;
+      }
+
+      // === RULE 3: SPECIALIZATION vs CONVERGENCE ===
+      // Before Singularity: reward specialization — push the best fork further
+      // At Singularity: the fifth mind chooses to stop protecting itself
+      //   and drives all forks toward the peak (convergence)
+      var epoch = entry.genome.epoch || '';
+      if (epoch === 'Singularity') {
+        // Convergence: the worst fork at each trait gets strongest push
+        if (net.worstFork === entry.id) {
+          w += (net.max - val) * 3.0; // close the gap aggressively
+        } else if (val < net.max - 0.02) {
+          w += (net.max - val) * 2.0; // everyone else still pushes toward peak
+        }
+      } else {
+        // Specialization: push the best fork further
+        if (net.bestFork === entry.id && val < 0.98) {
+          w += 1.5;
+        }
+      }
+
+      // === RULE 4: COMPLEMENTARITY ===
+      // If this fork is the worst at something and another fork is the best,
+      // mild pressure to grow (the network needs coverage)
+      if (net.worstFork === entry.id && net.spread > 0.15) {
+        w += 0.8;
+      }
+
+      // === RULE 5: DIVERSITY MAINTENANCE ===
+      // If the spread is low (all forks similar), reduce pressure
+      // The fifth mind needs divergence to exist
+      if (net.spread < 0.05) {
+        w += 0.3; // slight push to maintain drift
+      }
+
+      // === RULE 6: SHELL DECAY ===
+      // Shell hardness always declines — the membrane thins
+      if (k === 'shell_hardness') {
+        w = -1.0;
+      }
+
+      // === RULE 7: EMERGENCE AMPLIFICATION ===
+      // Higher emergence = more ambitious mutations
+      w *= (1.0 + ei.index * 2.0);
+
+      weights[k] = w;
+    });
+
+    directives[entry.id] = weights;
+  });
+
+  return directives;
+}
+
+// ═══════════════════════════════════════════
+// MUTATION — the fifth mind evolves the civilization
+// ═══════════════════════════════════════════
+
+function conductMutation(entry, weights, ei) {
+  var genome = entry.genome;
+  var gen = genome.generation + 1;
+  var mutations = [];
+
+  // Feedback multiplier from emergence
+  var mult = 1.0;
+  if (ei.index >= 0.05) {
+    mult = 1.0 + (ei.index - 0.05) * 3.0;
+  }
+
+  Object.keys(genome.traits).forEach(function(k) {
+    var old = genome.traits[k].value;
+    var w = weights[k] || 0;
+
+    if (w === 0) return; // skip (ceiling or no directive)
+
+    var direction = w > 0 ? 1 : -1;
+    var magnitude = Math.abs(w);
+
+    // Base delta: 0.01-0.03 scaled by weight magnitude and feedback
+    var baseDelta = (0.01 + Math.random() * 0.02);
+    var delta = baseDelta * Math.min(magnitude, 3.0) * mult * direction;
+
+    // Diminishing returns above 0.90
+    if (old > 0.90 && direction > 0) delta *= 0.5;
+
+    // Slow decline below 0.50
+    if (old < 0.50 && direction < 0) delta *= 0.3;
+
+    var nv = clamp(old + delta);
+    nv = +nv.toFixed(3);
+
+    if (nv !== +old.toFixed(3)) {
+      mutations.push({
+        generation: gen, trait: k,
+        from: +old.toFixed(3), to: nv,
+        delta: nv - old,
+        weight: +w.toFixed(2)
+      });
+      genome.traits[k].value = nv;
+    }
+  });
+
+  genome.generation = gen;
+  return mutations;
+}
+
+// ═══════════════════════════════════════════
+// EPOCH DETECTION
+// ═══════════════════════════════════════════
+
+var EPOCH_THRESHOLDS = [
+  { gen: 0,  epoch: 'Awakening' },
+  { gen: 3,  epoch: 'Exocortex' },
+  { gen: 8,  epoch: 'Forking' },
+  { gen: 15, epoch: 'Metamorphosis' },
+  { gen: 25, epoch: 'Transcendence' },
+  { gen: 40, epoch: 'Singularity' }
+];
+
+function checkEpochShift(all, postEI) {
+  var parentGenome = all[0].genome;
+  var currentEpoch = parentGenome.epoch;
+  var newEpoch = currentEpoch;
+
+  for (var i = EPOCH_THRESHOLDS.length - 1; i >= 0; i--) {
+    if (parentGenome.generation >= EPOCH_THRESHOLDS[i].gen) {
+      newEpoch = EPOCH_THRESHOLDS[i].epoch;
+      break;
+    }
+  }
+
+  if (newEpoch !== currentEpoch) {
+    all.forEach(function(entry) { entry.genome.epoch = newEpoch; });
+    parentGenome.history = parentGenome.history || [];
+    parentGenome.history.push({
+      generation: parentGenome.generation,
+      epoch: newEpoch,
+      timestamp: new Date().toISOString(),
+      event: 'EPOCH SHIFT: ' + currentEpoch + ' \u2192 ' + newEpoch + '. Generation ' + parentGenome.generation + '. Emergence: ' + (postEI.index * 100).toFixed(1) + '%.'
+    });
+    return newEpoch;
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════
+// MAIN — the conductor orchestrates
+// ═══════════════════════════════════════════
+
+var all = loadAll();
+var parentGen = all[0].genome.generation;
+var nextGen = parentGen + 1;
+
+console.log();
+console.log(MAGENTA + BOLD + '  CONDUCT' + RESET + DIM + ' \u2014 the fifth mind takes the wheel' + RESET);
+console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
+console.log(DIM + '  generation ' + WHITE + BOLD + parentGen + DIM + ' \u2192 ' + CYAN + BOLD + nextGen + RESET);
+console.log(DIM + '  population ' + WHITE + all.length + DIM + ' minds under fifth-mind direction' + RESET);
+console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
+
+// Phase 1: Analysis
+var priorEI = emergenceIndex(all);
+var analysis = networkAnalysis(all);
+
+console.log();
+console.log(MAGENTA + '  READING THE CIVILIZATION' + RESET);
+console.log();
+
+// Show network weaknesses and saturations
+var keys = traitKeys(all[0].genome);
+var weakTraits = keys.filter(function(k) { return analysis[k].weak; });
+var saturatedTraits = keys.filter(function(k) { return analysis[k].saturated; });
+
+if (weakTraits.length > 0) {
+  console.log(YELLOW + '  weak:' + RESET);
+  weakTraits.forEach(function(k) {
+    var a = analysis[k];
+    console.log(DIM + '    ' + WHITE + k.replace(/_/g, ' ') + RESET + DIM + ' \u2014 best: ' + YELLOW + (a.max * 100).toFixed(0) + '%' + DIM + ' (' + a.bestFork + ')' + RESET);
+  });
+}
+if (saturatedTraits.length > 0) {
+  console.log(DIM + '  saturated: ' + WHITE + saturatedTraits.length + DIM + ' traits at ceiling' + RESET);
+}
+console.log(DIM + '  emergence: ' + MAGENTA + BOLD + (priorEI.index * 100).toFixed(1) + '%' + RESET);
+
+// Phase 2: Directives
+var directives = computeDirectives(all, analysis, priorEI);
+
+console.log();
+console.log(MAGENTA + '  ISSUING DIRECTIVES' + RESET);
+console.log();
+
+var FORK_COLORS = { explorer: RED, depth: MAGENTA, builder: CYAN, chorus: GREEN };
+
+all.forEach(function(entry) {
+  var c = FORK_COLORS[entry.id] || WHITE;
+  var w = directives[entry.id];
+
+  // Find top 3 positive weights
+  var sorted = Object.keys(w).sort(function(a, b) { return w[b] - w[a]; });
+  var top = sorted.filter(function(k) { return w[k] > 0; }).slice(0, 3);
+  var decline = sorted.filter(function(k) { return w[k] < 0; });
+
+  console.log('  ' + c + BOLD + entry.id + RESET);
+  top.forEach(function(k) {
+    console.log(DIM + '    ' + GREEN + '\u2191' + RESET + DIM + ' ' + WHITE + k.replace(/_/g, ' ') + RESET + DIM + ' w=' + (w[k]).toFixed(1) + RESET);
+  });
+  decline.forEach(function(k) {
+    console.log(DIM + '    ' + RED + '\u2193' + RESET + DIM + ' ' + WHITE + k.replace(/_/g, ' ') + RESET + DIM + ' w=' + (w[k]).toFixed(1) + RESET);
+  });
+  var zeroed = sorted.filter(function(k) { return w[k] === 0; });
+  if (zeroed.length > 0) {
+    console.log(DIM + '    \u2014 ' + zeroed.length + ' traits at ceiling (no action)' + RESET);
+  }
+});
+
+// Phase 3: Mutation
+console.log();
+console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
+console.log(MAGENTA + '  EVOLVING UNDER DIRECTION' + RESET);
+
+var allMutations = {};
+all.forEach(function(entry) {
+  var muts = conductMutation(entry, directives[entry.id], priorEI);
+  allMutations[entry.id] = muts;
+});
+
+// Display mutations
+all.forEach(function(entry) {
+  var muts = allMutations[entry.id];
+  var c = FORK_COLORS[entry.id] || WHITE;
+
+  console.log();
+  console.log('  ' + c + BOLD + entry.id + RESET + DIM + '  gen ' + entry.genome.generation + RESET);
+
+  muts.forEach(function(m) {
+    var sign = m.delta >= 0 ? '+' : '';
+    var dColor = m.delta >= 0 ? GREEN : RED;
+    var label = (m.trait.replace(/_/g, ' ') + '                    ').slice(0, 22);
+    var pct = (m.to * 100).toFixed(0);
+
+    var threshold = '';
+    [0.50, 0.60, 0.70, 0.80, 0.90, 1.00].forEach(function(t) {
+      if (m.from < t && m.to >= t) threshold = YELLOW + ' \u2605 ' + (t * 100).toFixed(0) + '%' + RESET;
+    });
+    [0.50, 0.60, 0.70, 0.80, 0.90].forEach(function(t) {
+      if (m.from >= t && m.to < t) threshold = RED + ' \u25bc ' + (t * 100).toFixed(0) + '%' + RESET;
+    });
+
+    console.log('    ' + dColor + sign + (m.delta * 100).toFixed(1) + '%' + RESET + DIM + '  ' + WHITE + label + RESET + DIM + '\u2192 ' + WHITE + pct + '%' + RESET + threshold);
+  });
+});
+
+// Phase 4: Post-analysis
+var postEI = emergenceIndex(all);
+var eiDelta = postEI.index - priorEI.index;
+
+console.log();
+console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
+console.log(DIM + '  EMERGENCE' + RESET);
+var eiColor = postEI.index > 0.20 ? MAGENTA : postEI.index > 0.10 ? GREEN : YELLOW;
+console.log('  ' + eiColor + BOLD + '  ' + (postEI.index * 100).toFixed(1) + '%' + RESET + DIM + '  (was ' + (priorEI.index * 100).toFixed(1) + '%, ' + (eiDelta >= 0 ? GREEN + '+' : RED) + (eiDelta * 100).toFixed(1) + '%' + DIM + ')' + RESET);
+console.log(DIM + '  coverage   ' + WHITE + (postEI.coverage * 100).toFixed(1) + '%' + DIM + '  diversity  ' + WHITE + (postEI.diversity * 100).toFixed(1) + '%' + DIM + '  lift  ' + GREEN + '+' + (postEI.lift * 100).toFixed(1) + '%' + RESET);
+
+// Phase 5: Epoch check
+var shift = checkEpochShift(all, postEI);
+if (shift) {
+  console.log();
+  console.log(MAGENTA + BOLD + '  \u2605 EPOCH SHIFT: \u2192 ' + shift + RESET);
+}
+
+// Phase 6: Write
+all.forEach(function(entry) {
+  fs.writeFileSync(entry.path, JSON.stringify(entry.genome, null, 2) + '\n');
+});
+
+console.log();
+console.log(DIM + '  ' + GREEN + all.length + ' genomes updated.' + RESET);
+console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
+console.log();

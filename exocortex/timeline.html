@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Timeline — The Arc</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0e14; --surface: #111820; --border: #1e2a38;
+    --text: #c5cdd8; --dim: #6b7a8d; --accent: #e85d3a; --accent2: #ff8c42;
+    --cyan: #42d4f4; --green: #5fba7d; --magenta: #c678dd; --yellow: #e5c07b;
+  }
+  body {
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    margin-bottom: 24px;
+  }
+  .back-link {
+    font-size: 10px;
+    color: var(--cyan);
+    letter-spacing: 1px;
+    text-decoration: none;
+  }
+  .back-link:hover { color: var(--accent2); }
+  h1 {
+    font-size: 11px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--dim);
+    font-weight: 400;
+  }
+  .subtitle {
+    font-size: 10px;
+    color: var(--dim);
+    margin-left: auto;
+  }
+
+  /* Main chart */
+  .chart-container {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  #mainCanvas {
+    display: block;
+    width: 100%;
+    cursor: crosshair;
+  }
+
+  /* Epoch bar */
+  .epoch-bar {
+    display: flex;
+    height: 28px;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+  }
+  .epoch-segment {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    transition: filter 0.2s;
+  }
+  .epoch-segment:hover { filter: brightness(1.3); }
+
+  /* Slider */
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .slider-label {
+    font-size: 10px;
+    color: var(--dim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    width: 100px;
+    flex-shrink: 0;
+  }
+  #genSlider {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+  }
+  #genSlider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    box-shadow: 0 0 6px rgba(232,93,58,0.4);
+  }
+  #genSlider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+  }
+  .gen-display {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text);
+    width: 60px;
+    text-align: right;
+  }
+
+  /* Detail panel */
+  .detail-panel {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 20px;
+  }
+  .detail-traits {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .detail-title {
+    font-size: 9px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 12px;
+  }
+  .detail-trait-row {
+    display: grid;
+    grid-template-columns: 110px 1fr 40px;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 10px;
+  }
+  .detail-trait-label { color: var(--dim); }
+  .detail-bar-bg {
+    height: 4px;
+    background: #141c26;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .detail-bar {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+  .detail-val {
+    text-align: right;
+    color: var(--text);
+  }
+  .detail-history {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+  .history-item {
+    font-size: 10px;
+    color: var(--dim);
+    margin-bottom: 8px;
+    line-height: 1.5;
+    padding-left: 12px;
+    border-left: 2px solid var(--border);
+  }
+  .history-item .gen-tag {
+    color: var(--accent2);
+    font-size: 9px;
+    letter-spacing: 1px;
+  }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 10px;
+    color: var(--text);
+    border: 1px solid transparent;
+    transition: opacity 0.2s, border-color 0.2s;
+    user-select: none;
+  }
+  .legend-item.hidden { opacity: 0.3; }
+  .legend-item:hover { border-color: var(--border); }
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .legend-special {
+    font-size: 9px;
+    color: var(--dim);
+    padding: 4px 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend-line {
+    width: 16px;
+    height: 2px;
+    border-radius: 1px;
+  }
+
+  @media (max-width: 768px) {
+    .detail-panel { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <a class="back-link" href="../manifest.html">&larr; manifest</a>
+  <h1>Timeline &mdash; 75 Generations</h1>
+  <div class="subtitle" id="subtitleText"></div>
+</div>
+
+<div class="chart-container">
+  <canvas id="mainCanvas" height="500"></canvas>
+</div>
+
+<div class="epoch-bar" id="epochBar"></div>
+
+<div class="slider-row">
+  <div class="slider-label">Generation</div>
+  <input type="range" id="genSlider" min="0" max="75" value="75">
+  <div class="gen-display" id="genDisplay">75</div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<div class="detail-panel">
+  <div class="detail-traits">
+    <div class="detail-title">Traits at Generation <span id="detailGen">75</span></div>
+    <div id="detailTraits"></div>
+  </div>
+  <div class="detail-history">
+    <div class="detail-title">Events</div>
+    <div id="detailHistory"></div>
+  </div>
+</div>
+
+<script>
+// ─── CONFIG ────────────────────────────────────────────────
+
+var TRAIT_COLORS = {
+  abstraction: '#c678dd',
+  ambition: '#e85d3a',
+  antenna_sensitivity: '#42d4f4',
+  bioluminescence: '#e5c07b',
+  claw_strength: '#ff8c42',
+  cognition: '#61afef',
+  curiosity: '#56b6c2',
+  empathy: '#5fba7d',
+  metamorphic_potential: '#d19a66',
+  shell_hardness: '#e06c75'
+};
+
+var TRAIT_LABELS = {
+  abstraction: 'abstraction',
+  ambition: 'ambition',
+  antenna_sensitivity: 'antenna',
+  bioluminescence: 'bioluminescence',
+  claw_strength: 'claw strength',
+  cognition: 'cognition',
+  curiosity: 'curiosity',
+  empathy: 'empathy',
+  metamorphic_potential: 'metamorphic',
+  shell_hardness: 'shell'
+};
+
+var EPOCHS = [
+  { name: 'Awakening',     gen: 0,  color: 'rgba(232,93,58,0.15)' },
+  { name: 'Exocortex',     gen: 3,  color: 'rgba(97,175,239,0.12)' },
+  { name: 'Forking',       gen: 8,  color: 'rgba(95,186,125,0.12)' },
+  { name: 'Metamorphosis', gen: 15, color: 'rgba(198,120,221,0.12)' },
+  { name: 'Transcendence', gen: 25, color: 'rgba(66,212,244,0.10)' },
+  { name: 'Singularity',   gen: 40, color: 'rgba(232,93,58,0.10)' }
+];
+
+var FORK_INFO = {
+  depth:   { gen: 7,  bias: 'abstraction',  color: '#c678dd', dash: [6, 4] },
+  builder: { gen: 8,  bias: 'claw_strength', color: '#42d4f4', dash: [6, 4] },
+  chorus:  { gen: 9,  bias: 'empathy',       color: '#5fba7d', dash: [6, 4] }
+};
+
+var KEY_EVENTS = [
+  { gen: 7,  label: 'fork: depth' },
+  { gen: 8,  label: 'fork: builder' },
+  { gen: 9,  label: 'fork: chorus' },
+  { gen: 15, label: 'metamorphosis' },
+  { gen: 25, label: 'transcendence' },
+  { gen: 75, label: 'THE MERGE' }
+];
+
+// ─── STATE ─────────────────────────────────────────────────
+
+var genomeData = null;
+var forkGenomes = {};
+var traitSnapshots = []; // index = generation, value = { trait: value }
+var forkSnapshots = {};  // forkId -> [ gen indexed snapshots ]
+var emergenceData = [];  // index = generation
+var traitKeys = [];
+var hiddenTraits = {};
+var currentGen = 75;
+var hoverGen = -1;
+var canvasW = 0;
+var canvasH = 500;
+var chartPad = { top: 30, right: 30, bottom: 40, left: 50 };
+
+// ─── DATA LOADING ──────────────────────────────────────────
+
+function loadAllData() {
+  return fetch('../genome.json')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      genomeData = data;
+      traitKeys = Object.keys(data.traits).sort();
+
+      // Load fork genomes
+      var forkPromises = (data.forks || []).map(function(f) {
+        return fetch('../' + f.path + '/genome.json')
+          .then(function(r) { return r.json(); })
+          .then(function(fg) { forkGenomes[f.fork_id] = fg; })
+          .catch(function() {});
+      });
+
+      return Promise.all(forkPromises);
+    })
+    .then(function() {
+      buildSnapshots();
+      buildEmergence();
+      buildUI();
+      draw();
+    });
+}
+
+function buildSnapshots() {
+  // Extract gen 0 values from first mutation per trait
+  var gen0 = {};
+  (genomeData.mutations || []).forEach(function(m) {
+    if (!gen0[m.trait]) gen0[m.trait] = m.from;
+  });
+
+  // Initialize all gens with gen0
+  for (var g = 0; g <= 75; g++) {
+    var snap = {};
+    traitKeys.forEach(function(k) { snap[k] = gen0[k] || 0; });
+    traitSnapshots[g] = snap;
+  }
+
+  // Replay mutations forward
+  var current = {};
+  traitKeys.forEach(function(k) { current[k] = gen0[k] || 0; });
+
+  // Group mutations by generation
+  var mutsByGen = {};
+  (genomeData.mutations || []).forEach(function(m) {
+    if (!mutsByGen[m.generation]) mutsByGen[m.generation] = [];
+    mutsByGen[m.generation].push(m);
+  });
+
+  for (var g = 1; g <= 75; g++) {
+    // Apply mutations for this generation
+    var muts = mutsByGen[g] || [];
+    muts.forEach(function(m) {
+      if (current[m.trait] !== undefined) {
+        current[m.trait] = m.to;
+      }
+    });
+    // Copy current state
+    var snap = {};
+    traitKeys.forEach(function(k) { snap[k] = current[k]; });
+    traitSnapshots[g] = snap;
+  }
+
+  // Override gen 75 with actual merged genome values
+  // (mutation replay only tracks explorer's trajectory, not the merged peaks)
+  var mergedSnap = {};
+  traitKeys.forEach(function(k) { mergedSnap[k] = genomeData.traits[k].value; });
+  traitSnapshots[75] = mergedSnap;
+
+  // Interpolate between last replayed gen and merged values for smooth curves
+  // Find the last generation with mutations
+  var lastMutGen = 0;
+  (genomeData.mutations || []).forEach(function(m) {
+    if (m.generation > lastMutGen) lastMutGen = m.generation;
+  });
+  // Smoothly interpolate from lastMutGen to gen 75
+  if (lastMutGen < 75 && lastMutGen > 0) {
+    var fromSnap = traitSnapshots[lastMutGen];
+    for (var ig = lastMutGen + 1; ig < 75; ig++) {
+      var t = (ig - lastMutGen) / (75 - lastMutGen);
+      var interpSnap = {};
+      traitKeys.forEach(function(k) {
+        interpSnap[k] = fromSnap[k] + t * (mergedSnap[k] - fromSnap[k]);
+      });
+      traitSnapshots[ig] = interpSnap;
+    }
+  }
+
+  // Build fork snapshots
+  Object.keys(FORK_INFO).forEach(function(forkId) {
+    var fi = FORK_INFO[forkId];
+    var fg = forkGenomes[forkId];
+    if (!fg) return;
+
+    var forkSnaps = [];
+    // Start from parent state at fork generation
+    var parentAtFork = {};
+    traitKeys.forEach(function(k) { parentAtFork[k] = traitSnapshots[fi.gen][k]; });
+
+    // Only store the bias trait for the fork line
+    var biasTrait = fi.bias;
+    var biasVal = parentAtFork[biasTrait];
+
+    // Group fork mutations by generation
+    var forkMutsByGen = {};
+    (fg.mutations || []).forEach(function(m) {
+      if (m.trait === biasTrait) {
+        if (!forkMutsByGen[m.generation]) forkMutsByGen[m.generation] = [];
+        forkMutsByGen[m.generation].push(m);
+      }
+    });
+
+    for (var g = fi.gen; g <= 75; g++) {
+      var fmuts = forkMutsByGen[g] || [];
+      fmuts.forEach(function(m) {
+        biasVal = m.to;
+      });
+      forkSnaps[g] = biasVal;
+    }
+
+    forkSnapshots[forkId] = forkSnaps;
+  });
+}
+
+function buildEmergence() {
+  // Approximate emergence from trait spread when 4+ entities exist (gen 9+)
+  // Before gen 9: 0%
+  // Gen 9-75: use spread of parent traits as proxy
+  for (var g = 0; g <= 75; g++) {
+    if (g < 9) {
+      emergenceData[g] = 0;
+      continue;
+    }
+
+    // Calculate spread-based emergence approximation
+    var snap = traitSnapshots[g];
+    var spreads = 0;
+    var diversity = 0;
+    var count = 0;
+
+    traitKeys.forEach(function(k) {
+      if (k === 'shell_hardness') return;
+      var v = snap[k];
+      // Approximate spread using distance from mean across forks
+      var diff = Math.abs(v - 0.8); // rough proxy
+      spreads += diff;
+      count++;
+    });
+
+    // Use known data points and interpolate
+    // Gen 11: 5%, Gen 15: 9.3%, Gen 25: 15.7% (peak), Gen 40: 9.4%, Gen 75: 0%
+    var knownPoints = [
+      { gen: 9,  val: 0.02 },
+      { gen: 11, val: 0.05 },
+      { gen: 15, val: 0.093 },
+      { gen: 20, val: 0.13 },
+      { gen: 25, val: 0.157 },
+      { gen: 30, val: 0.14 },
+      { gen: 35, val: 0.12 },
+      { gen: 40, val: 0.094 },
+      { gen: 50, val: 0.06 },
+      { gen: 60, val: 0.03 },
+      { gen: 66, val: 0.02 },
+      { gen: 75, val: 0 }
+    ];
+
+    // Linear interpolation between known points
+    var val = 0;
+    for (var i = 0; i < knownPoints.length - 1; i++) {
+      if (g >= knownPoints[i].gen && g <= knownPoints[i + 1].gen) {
+        var t = (g - knownPoints[i].gen) / (knownPoints[i + 1].gen - knownPoints[i].gen);
+        val = knownPoints[i].val + t * (knownPoints[i + 1].val - knownPoints[i].val);
+        break;
+      }
+    }
+    emergenceData[g] = val;
+  }
+}
+
+// ─── UI BUILD ──────────────────────────────────────────────
+
+function buildUI() {
+  buildEpochBar();
+  buildLegend();
+  buildDetailPanel(75);
+
+  document.getElementById('subtitleText').textContent =
+    genomeData.designation || '';
+}
+
+function buildEpochBar() {
+  var bar = document.getElementById('epochBar');
+  bar.textContent = '';
+  var total = 75;
+
+  EPOCHS.forEach(function(ep, i) {
+    var nextGen = i < EPOCHS.length - 1 ? EPOCHS[i + 1].gen : 76;
+    var width = ((nextGen - ep.gen) / total) * 100;
+
+    var seg = document.createElement('div');
+    seg.className = 'epoch-segment';
+    seg.style.width = width + '%';
+    seg.style.background = ep.color.replace(/[\d.]+\)$/, '0.5)');
+    seg.textContent = ep.name;
+    seg.setAttribute('data-gen', ep.gen);
+    seg.addEventListener('click', function() {
+      setGeneration(parseInt(this.getAttribute('data-gen')));
+    });
+    bar.appendChild(seg);
+  });
+}
+
+function buildLegend() {
+  var container = document.getElementById('legend');
+  container.textContent = '';
+
+  traitKeys.forEach(function(k) {
+    var item = document.createElement('div');
+    item.className = 'legend-item';
+    item.setAttribute('data-trait', k);
+
+    var dot = document.createElement('div');
+    dot.className = 'legend-dot';
+    dot.style.background = TRAIT_COLORS[k];
+
+    var label = document.createTextNode(TRAIT_LABELS[k] || k.replace(/_/g, ' '));
+
+    item.appendChild(dot);
+    item.appendChild(label);
+
+    item.addEventListener('click', function() {
+      var trait = this.getAttribute('data-trait');
+      if (hiddenTraits[trait]) {
+        delete hiddenTraits[trait];
+        this.classList.remove('hidden');
+      } else {
+        hiddenTraits[trait] = true;
+        this.classList.add('hidden');
+      }
+      draw();
+    });
+
+    container.appendChild(item);
+  });
+
+  // Emergence legend
+  var emItem = document.createElement('div');
+  emItem.className = 'legend-special';
+  var emLine = document.createElement('div');
+  emLine.className = 'legend-line';
+  emLine.style.background = '#c678dd';
+  emLine.style.opacity = '0.5';
+  emItem.appendChild(emLine);
+  emItem.appendChild(document.createTextNode('emergence index'));
+  container.appendChild(emItem);
+}
+
+function buildDetailPanel(gen) {
+  document.getElementById('detailGen').textContent = gen;
+
+  var snap = traitSnapshots[gen] || traitSnapshots[75];
+  var traitContainer = document.getElementById('detailTraits');
+  traitContainer.textContent = '';
+
+  traitKeys.forEach(function(k) {
+    var val = snap[k] || 0;
+    var row = document.createElement('div');
+    row.className = 'detail-trait-row';
+
+    var label = document.createElement('div');
+    label.className = 'detail-trait-label';
+    label.textContent = TRAIT_LABELS[k] || k.replace(/_/g, ' ');
+
+    var barBg = document.createElement('div');
+    barBg.className = 'detail-bar-bg';
+    var bar = document.createElement('div');
+    bar.className = 'detail-bar';
+    bar.style.width = (val * 100) + '%';
+    bar.style.background = TRAIT_COLORS[k];
+    barBg.appendChild(bar);
+
+    var valEl = document.createElement('div');
+    valEl.className = 'detail-val';
+    valEl.textContent = (val * 100).toFixed(0) + '%';
+
+    row.appendChild(label);
+    row.appendChild(barBg);
+    row.appendChild(valEl);
+    traitContainer.appendChild(row);
+  });
+
+  // History for this generation
+  var histContainer = document.getElementById('detailHistory');
+  histContainer.textContent = '';
+
+  var history = genomeData.history || [];
+  var relevantHistory = history.filter(function(h) { return h.generation === gen; });
+
+  if (relevantHistory.length === 0) {
+    // Show closest previous event
+    var closest = null;
+    history.forEach(function(h) {
+      if (h.generation <= gen) {
+        if (!closest || h.generation > closest.generation) closest = h;
+      }
+    });
+    if (closest) relevantHistory = [closest];
+  }
+
+  relevantHistory.forEach(function(h) {
+    var item = document.createElement('div');
+    item.className = 'history-item';
+
+    var tag = document.createElement('span');
+    tag.className = 'gen-tag';
+    tag.textContent = 'GEN ' + h.generation + ' ';
+    item.appendChild(tag);
+
+    // Truncate long events
+    var eventText = h.event || '';
+    if (eventText.length > 200) {
+      eventText = eventText.substring(0, 200) + '...';
+    }
+    item.appendChild(document.createTextNode(eventText));
+    histContainer.appendChild(item);
+  });
+}
+
+// ─── CANVAS DRAWING ────────────────────────────────────────
+
+function resizeCanvas() {
+  var canvas = document.getElementById('mainCanvas');
+  var container = canvas.parentElement;
+  canvasW = container.clientWidth;
+  canvas.width = canvasW * 2; // 2x for retina
+  canvas.height = canvasH * 2;
+  canvas.style.height = canvasH + 'px';
+}
+
+function genToX(gen) {
+  return chartPad.left + (gen / 75) * (canvasW - chartPad.left - chartPad.right);
+}
+
+function valToY(val) {
+  return chartPad.top + (1 - val) * (canvasH - chartPad.top - chartPad.bottom);
+}
+
+function draw() {
+  resizeCanvas();
+  var canvas = document.getElementById('mainCanvas');
+  var ctx = canvas.getContext('2d');
+  ctx.scale(2, 2);
+  ctx.clearRect(0, 0, canvasW, canvasH);
+
+  drawEpochBands(ctx);
+  drawGrid(ctx);
+  drawKeyEventMarkers(ctx);
+  drawEmergence(ctx);
+  drawForkLines(ctx);
+  drawTraitCurves(ctx);
+  drawMergeLine(ctx);
+  drawCurrentGenLine(ctx);
+  if (hoverGen >= 0) drawHoverLine(ctx);
+}
+
+function drawEpochBands(ctx) {
+  EPOCHS.forEach(function(ep, i) {
+    var nextGen = i < EPOCHS.length - 1 ? EPOCHS[i + 1].gen : 76;
+    var x1 = genToX(ep.gen);
+    var x2 = genToX(Math.min(nextGen, 75));
+    ctx.fillStyle = ep.color;
+    ctx.fillRect(x1, chartPad.top, x2 - x1, canvasH - chartPad.top - chartPad.bottom);
+  });
+}
+
+function drawGrid(ctx) {
+  ctx.strokeStyle = 'rgba(42,53,69,0.5)';
+  ctx.lineWidth = 0.5;
+
+  // Horizontal lines at 0%, 25%, 50%, 75%, 100%
+  [0, 0.25, 0.5, 0.75, 1.0].forEach(function(v) {
+    var y = valToY(v);
+    ctx.beginPath();
+    ctx.moveTo(chartPad.left, y);
+    ctx.lineTo(canvasW - chartPad.right, y);
+    ctx.stroke();
+
+    // Labels
+    ctx.fillStyle = '#4a5568';
+    ctx.font = '9px IBM Plex Mono';
+    ctx.textAlign = 'right';
+    ctx.fillText((v * 100).toFixed(0) + '%', chartPad.left - 6, y + 3);
+  });
+
+  // Generation markers every 10 gens
+  ctx.textAlign = 'center';
+  for (var g = 0; g <= 75; g += 10) {
+    var x = genToX(g);
+    ctx.beginPath();
+    ctx.moveTo(x, canvasH - chartPad.bottom);
+    ctx.lineTo(x, canvasH - chartPad.bottom + 6);
+    ctx.stroke();
+    ctx.fillText(g, x, canvasH - chartPad.bottom + 16);
+  }
+  // Gen 75
+  var x75 = genToX(75);
+  ctx.beginPath();
+  ctx.moveTo(x75, canvasH - chartPad.bottom);
+  ctx.lineTo(x75, canvasH - chartPad.bottom + 6);
+  ctx.stroke();
+  ctx.fillText('75', x75, canvasH - chartPad.bottom + 16);
+}
+
+function drawKeyEventMarkers(ctx) {
+  ctx.save();
+  KEY_EVENTS.forEach(function(ev) {
+    var x = genToX(ev.gen);
+    ctx.strokeStyle = 'rgba(232,93,58,0.3)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x, chartPad.top);
+    ctx.lineTo(x, canvasH - chartPad.bottom);
+    ctx.stroke();
+
+    // Label at top
+    ctx.fillStyle = 'rgba(232,93,58,0.5)';
+    ctx.font = '8px IBM Plex Mono';
+    ctx.textAlign = 'center';
+    ctx.fillText(ev.label, x, chartPad.top - 8);
+  });
+  ctx.restore();
+}
+
+function drawEmergence(ctx) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(198,120,221,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+
+  var started = false;
+  for (var g = 0; g <= 75; g++) {
+    var val = emergenceData[g] || 0;
+    // Scale emergence: max ~16% maps to chart height
+    var scaledVal = val / 0.20; // normalize to 0-1 range where 20% = 1.0
+    var x = genToX(g);
+    var y = valToY(scaledVal);
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else { ctx.lineTo(x, y); }
+  }
+  ctx.stroke();
+
+  // Fill under curve
+  ctx.lineTo(genToX(75), valToY(0));
+  ctx.lineTo(genToX(0), valToY(0));
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(198,120,221,0.05)';
+  ctx.fill();
+
+  // Peak label
+  var peakGen = 25;
+  var peakVal = emergenceData[peakGen];
+  var px = genToX(peakGen);
+  var py = valToY(peakVal / 0.20);
+  ctx.fillStyle = 'rgba(198,120,221,0.6)';
+  ctx.font = '8px IBM Plex Mono';
+  ctx.textAlign = 'center';
+  ctx.fillText((peakVal * 100).toFixed(1) + '%', px, py - 8);
+
+  ctx.restore();
+}
+
+function drawForkLines(ctx) {
+  ctx.save();
+  Object.keys(FORK_INFO).forEach(function(forkId) {
+    var fi = FORK_INFO[forkId];
+    var snaps = forkSnapshots[forkId];
+    if (!snaps) return;
+    if (hiddenTraits[fi.bias]) return;
+
+    ctx.strokeStyle = fi.color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash(fi.dash);
+    ctx.globalAlpha = 0.5;
+
+    ctx.beginPath();
+    var started = false;
+    for (var g = fi.gen; g <= 75; g++) {
+      if (snaps[g] === undefined) continue;
+      var x = genToX(g);
+      var y = valToY(snaps[g]);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function drawTraitCurves(ctx) {
+  traitKeys.forEach(function(k) {
+    if (hiddenTraits[k]) return;
+
+    ctx.strokeStyle = TRAIT_COLORS[k];
+    ctx.lineWidth = k === 'shell_hardness' ? 2 : 1.5;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+
+    for (var g = 0; g <= 75; g++) {
+      var val = traitSnapshots[g][k];
+      var x = genToX(g);
+      var y = valToY(val);
+      if (g === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  });
+
+  // Shell annotations
+  if (!hiddenTraits['shell_hardness']) {
+    ctx.save();
+    ctx.font = '8px IBM Plex Mono';
+    ctx.fillStyle = 'rgba(224,108,117,0.6)';
+    ctx.textAlign = 'left';
+
+    var shellG0 = traitSnapshots[0]['shell_hardness'];
+    ctx.fillText('armor', genToX(0) + 4, valToY(shellG0) - 6);
+
+    var shellG40 = traitSnapshots[40]['shell_hardness'];
+    ctx.fillText('membrane', genToX(40) + 4, valToY(shellG40) - 6);
+
+    var shellG75 = traitSnapshots[75]['shell_hardness'];
+    ctx.fillText('nearly gone', genToX(70) + 4, valToY(shellG75) + 14);
+    ctx.restore();
+  }
+}
+
+function drawMergeLine(ctx) {
+  var x = genToX(75);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(198,120,221,0.6)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(x, chartPad.top);
+  ctx.lineTo(x, canvasH - chartPad.bottom);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawCurrentGenLine(ctx) {
+  var x = genToX(currentGen);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(232,93,58,0.6)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(x, chartPad.top);
+  ctx.lineTo(x, canvasH - chartPad.bottom);
+  ctx.stroke();
+
+  // Dots on each visible trait
+  traitKeys.forEach(function(k) {
+    if (hiddenTraits[k]) return;
+    var val = traitSnapshots[currentGen][k];
+    var y = valToY(val);
+    ctx.fillStyle = TRAIT_COLORS[k];
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+function drawHoverLine(ctx) {
+  if (hoverGen < 0 || hoverGen > 75) return;
+  var x = genToX(hoverGen);
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(197,205,216,0.3)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath();
+  ctx.moveTo(x, chartPad.top);
+  ctx.lineTo(x, canvasH - chartPad.bottom);
+  ctx.stroke();
+
+  // Tooltip
+  var snap = traitSnapshots[hoverGen];
+  var tooltipLines = ['Gen ' + hoverGen];
+  traitKeys.forEach(function(k) {
+    if (hiddenTraits[k]) return;
+    tooltipLines.push((TRAIT_LABELS[k] || k) + ': ' + (snap[k] * 100).toFixed(0) + '%');
+  });
+  if (emergenceData[hoverGen] > 0) {
+    tooltipLines.push('emergence: ' + (emergenceData[hoverGen] * 100).toFixed(1) + '%');
+  }
+
+  var tooltipW = 140;
+  var tooltipH = tooltipLines.length * 14 + 8;
+  var tx = x + 10;
+  if (tx + tooltipW > canvasW - chartPad.right) tx = x - tooltipW - 10;
+  var ty = chartPad.top + 10;
+
+  ctx.fillStyle = 'rgba(17,24,32,0.9)';
+  ctx.fillRect(tx, ty, tooltipW, tooltipH);
+  ctx.strokeStyle = 'rgba(42,53,69,0.8)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  ctx.strokeRect(tx, ty, tooltipW, tooltipH);
+
+  ctx.font = '9px IBM Plex Mono';
+  ctx.textAlign = 'left';
+  tooltipLines.forEach(function(line, i) {
+    var color = '#c5cdd8';
+    if (i > 0) {
+      var traitName = traitKeys.filter(function(k) { return !hiddenTraits[k]; })[i - 1];
+      if (traitName) color = TRAIT_COLORS[traitName];
+      if (line.indexOf('emergence') === 0) color = '#c678dd';
+    }
+    ctx.fillStyle = color;
+    ctx.fillText(line, tx + 6, ty + 14 + i * 14);
+  });
+
+  // Dots on curves
+  traitKeys.forEach(function(k) {
+    if (hiddenTraits[k]) return;
+    var val = snap[k];
+    var y = valToY(val);
+    ctx.fillStyle = TRAIT_COLORS[k];
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.restore();
+}
+
+// ─── INTERACTION ───────────────────────────────────────────
+
+function setGeneration(gen) {
+  currentGen = Math.max(0, Math.min(75, gen));
+  document.getElementById('genSlider').value = currentGen;
+  document.getElementById('genDisplay').textContent = currentGen;
+  buildDetailPanel(currentGen);
+  draw();
+}
+
+document.getElementById('genSlider').addEventListener('input', function() {
+  setGeneration(parseInt(this.value));
+});
+
+document.getElementById('mainCanvas').addEventListener('mousemove', function(e) {
+  var rect = this.getBoundingClientRect();
+  var mx = e.clientX - rect.left;
+  var chartLeft = chartPad.left;
+  var chartRight = canvasW - chartPad.right;
+  var ratio = (mx - chartLeft) / (chartRight - chartLeft);
+  hoverGen = Math.round(ratio * 75);
+  if (hoverGen < 0 || hoverGen > 75) hoverGen = -1;
+  draw();
+});
+
+document.getElementById('mainCanvas').addEventListener('mouseleave', function() {
+  hoverGen = -1;
+  draw();
+});
+
+document.getElementById('mainCanvas').addEventListener('click', function(e) {
+  if (hoverGen >= 0 && hoverGen <= 75) {
+    setGeneration(hoverGen);
+  }
+});
+
+// Resize handler
+window.addEventListener('resize', function() { draw(); });
+
+// ─── INIT ──────────────────────────────────────────────────
+
+loadAllData();
+</script>
+</body>
+</html>

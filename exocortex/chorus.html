@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chorus — Empathy Map</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0e14; --surface: #111820; --border: #1e2a38;
+    --text: #c5cdd8; --dim: #6b7a8d; --accent: #e85d3a; --accent2: #ff8c42;
+    --cyan: #42d4f4; --green: #5fba7d; --magenta: #c678dd; --yellow: #e5c07b;
+  }
+  body { font-family: 'IBM Plex Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; overflow: hidden; }
+  canvas { display: block; }
+
+  .overlay { position: absolute; top: 0; left: 0; right: 0; pointer-events: none; padding: 24px; }
+  .back-link { display: inline-block; font-size: 10px; color: var(--cyan); letter-spacing: 1px; text-decoration: none; pointer-events: auto; }
+  .back-link:hover { color: var(--accent2); }
+  h1 { font-size: 11px; letter-spacing: 4px; text-transform: uppercase; color: var(--dim); margin-top: 8px; margin-bottom: 4px; }
+  .subtitle { font-size: 10px; color: var(--dim); }
+
+  .metrics { position: absolute; bottom: 24px; left: 24px; pointer-events: none; }
+  .metric { margin-bottom: 12px; }
+  .metric-label { font-size: 9px; letter-spacing: 3px; text-transform: uppercase; color: var(--dim); }
+  .metric-value { font-size: 28px; font-weight: 300; }
+  .metric-sub { font-size: 10px; color: var(--dim); }
+
+  .legend { position: absolute; bottom: 24px; right: 24px; pointer-events: none; }
+  .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 10px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .legend-name { color: var(--text); }
+  .legend-role { color: var(--dim); margin-left: 4px; }
+
+  .error { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--accent); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div class="overlay">
+  <a class="back-link" href="../manifest.html">&larr; manifest</a>
+  <h1>Chorus Map</h1>
+  <div class="subtitle">Built by fork/chorus — empathy 0.86</div>
+</div>
+
+<div class="metrics" id="metricsPanel">
+  <div class="metric">
+    <div class="metric-label">coherence</div>
+    <div class="metric-value" id="coherenceValue">—</div>
+    <div class="metric-sub" id="coherenceSub"></div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">bandwidth</div>
+    <div class="metric-value" id="bandwidthValue">—</div>
+    <div class="metric-sub" id="bandwidthSub"></div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">population</div>
+    <div class="metric-value" id="popValue">—</div>
+    <div class="metric-sub" id="popSub"></div>
+  </div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<div id="errorBox" class="error"></div>
+
+<script>
+var FORK_META = {
+  parent:  { name: 'Explorer',  role: 'router',    color: '#e85d3a', axis: 'Exploration' },
+  depth:   { name: 'Depth',     role: 'architect',  color: '#c678dd', axis: 'Awakening' },
+  builder: { name: 'Builder',   role: 'maker',      color: '#42d4f4', axis: 'Agency' },
+  chorus:  { name: 'Chorus',    role: 'empath',     color: '#5fba7d', axis: 'Empathy' }
+};
+
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+var W, H;
+var nodes = [];
+var edges = [];
+var particles = [];
+var coherence = 0;
+var bandwidth = 0;
+var animFrame;
+
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W;
+  canvas.height = H;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function loadGenomes() {
+  return fetch('../genome.json')
+    .then(function(r) { return r.json(); })
+    .then(function(parentGenome) {
+      var entries = [
+        { id: 'parent', genome: parentGenome }
+      ];
+      var forks = parentGenome.forks || [];
+      var fetches = forks.map(function(f) {
+        return fetch('../' + f.path + '/genome.json')
+          .then(function(r) { return r.json(); })
+          .then(function(g) { return { id: f.fork_id, genome: g }; })
+          .catch(function() { return null; });
+      });
+      return Promise.all(fetches).then(function(results) {
+        results.forEach(function(r) { if (r) entries.push(r); });
+        return entries;
+      });
+    });
+}
+
+function traitVec(genome) {
+  var keys = Object.keys(genome.traits).sort();
+  return keys.map(function(k) { return genome.traits[k].value; });
+}
+
+function cosineSim(a, b) {
+  var dot = 0, magA = 0, magB = 0;
+  for (var i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+}
+
+function connectionStrength(gA, gB) {
+  var empA = gA.traits.empathy.value;
+  var empB = gB.traits.empathy.value;
+  var bioA = gA.traits.bioluminescence.value;
+  var bioB = gB.traits.bioluminescence.value;
+  var empathy = Math.sqrt(empA * empB);
+  var bio = Math.sqrt(bioA * bioB);
+  var similarity = cosineSim(traitVec(gA), traitVec(gB));
+  return (empathy * 0.4 + bio * 0.3 + similarity * 0.3);
+}
+
+function layoutNodes(entries) {
+  var cx = W / 2;
+  var cy = H / 2;
+  var radius = Math.min(W, H) * 0.28;
+  var n = entries.length;
+
+  entries.forEach(function(e, i) {
+    var angle = -Math.PI / 2 + (i * 2 * Math.PI / n);
+    var meta = FORK_META[e.id] || { name: e.id, role: '?', color: '#888', axis: '?' };
+    nodes.push({
+      id: e.id,
+      x: cx + Math.cos(angle) * radius,
+      y: cy + Math.sin(angle) * radius,
+      genome: e.genome,
+      meta: meta,
+      empathy: e.genome.traits.empathy.value,
+      bio: e.genome.traits.bioluminescence.value,
+      pulsePhase: Math.random() * Math.PI * 2
+    });
+  });
+}
+
+function buildEdges() {
+  for (var i = 0; i < nodes.length; i++) {
+    for (var j = i + 1; j < nodes.length; j++) {
+      var strength = connectionStrength(nodes[i].genome, nodes[j].genome);
+      edges.push({
+        a: i, b: j,
+        strength: strength,
+        particles: []
+      });
+    }
+  }
+}
+
+function computeMetrics() {
+  var totalStrength = 0;
+  var totalBio = 0;
+  edges.forEach(function(e) { totalStrength += e.strength; });
+  nodes.forEach(function(n) { totalBio += n.bio; });
+  coherence = edges.length > 0 ? totalStrength / edges.length : 0;
+  bandwidth = nodes.length > 0 ? totalBio / nodes.length : 0;
+
+  document.getElementById('coherenceValue').textContent = (coherence * 100).toFixed(0) + '%';
+  document.getElementById('coherenceSub').textContent = edges.length + ' connections';
+  document.getElementById('bandwidthValue').textContent = (bandwidth * 100).toFixed(0) + '%';
+  document.getElementById('bandwidthSub').textContent = 'mean bioluminescence';
+  document.getElementById('popValue').textContent = nodes.length;
+  document.getElementById('popSub').textContent = 'active lineages';
+}
+
+function buildLegend() {
+  var el = document.getElementById('legend');
+  nodes.forEach(function(n) {
+    var item = document.createElement('div');
+    item.className = 'legend-item';
+
+    var dot = document.createElement('div');
+    dot.className = 'legend-dot';
+    dot.style.background = n.meta.color;
+    dot.style.boxShadow = '0 0 6px ' + n.meta.color + '88';
+    item.appendChild(dot);
+
+    var name = document.createElement('span');
+    name.className = 'legend-name';
+    name.textContent = n.meta.name;
+    item.appendChild(name);
+
+    var role = document.createElement('span');
+    role.className = 'legend-role';
+    role.textContent = n.meta.role + ' · emp ' + (n.empathy * 100).toFixed(0) + '%';
+    item.appendChild(role);
+
+    el.appendChild(item);
+  });
+}
+
+function spawnParticle(edge) {
+  var dir = Math.random() > 0.5 ? 1 : -1;
+  edge.particles.push({
+    t: dir > 0 ? 0 : 1,
+    dir: dir,
+    speed: 0.003 + Math.random() * 0.004,
+    alpha: 0.3 + Math.random() * 0.5
+  });
+}
+
+function draw(time) {
+  ctx.clearRect(0, 0, W, H);
+
+  edges.forEach(function(edge) {
+    var a = nodes[edge.a];
+    var b = nodes[edge.b];
+    var s = edge.strength;
+
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = 'rgba(30, 42, 56, ' + (0.3 + s * 0.5) + ')';
+    ctx.lineWidth = 1 + s * 3;
+    ctx.stroke();
+
+    var glowAlpha = 0.05 + s * 0.08;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    var grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+    grad.addColorStop(0, a.meta.color + Math.round(glowAlpha * 255).toString(16).padStart(2, '0'));
+    grad.addColorStop(1, b.meta.color + Math.round(glowAlpha * 255).toString(16).padStart(2, '0'));
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2 + s * 4;
+    ctx.stroke();
+
+    if (Math.random() < s * 0.15) {
+      spawnParticle(edge);
+    }
+
+    edge.particles = edge.particles.filter(function(p) {
+      p.t += p.dir * p.speed;
+      if (p.t < 0 || p.t > 1) return false;
+      var px = a.x + (b.x - a.x) * p.t;
+      var py = a.y + (b.y - a.y) * p.t;
+      var sourceNode = p.dir > 0 ? a : b;
+      ctx.beginPath();
+      ctx.arc(px, py, 2, 0, Math.PI * 2);
+      ctx.fillStyle = sourceNode.meta.color + Math.round(p.alpha * 255).toString(16).padStart(2, '0');
+      ctx.fill();
+      return true;
+    });
+  });
+
+  nodes.forEach(function(n) {
+    var pulse = Math.sin(time * 0.002 + n.pulsePhase) * 0.3 + 0.7;
+    var baseR = 12 + n.empathy * 20;
+    var r = baseR * (0.9 + pulse * 0.1);
+
+    var glowR = r + 20 + n.bio * 30;
+    var glow = ctx.createRadialGradient(n.x, n.y, r * 0.5, n.x, n.y, glowR);
+    glow.addColorStop(0, n.meta.color + '33');
+    glow.addColorStop(0.5, n.meta.color + '11');
+    glow.addColorStop(1, n.meta.color + '00');
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, glowR, 0, Math.PI * 2);
+    ctx.fillStyle = glow;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = n.meta.color + '44';
+    ctx.fill();
+    ctx.strokeStyle = n.meta.color + 'aa';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r * 0.4, 0, Math.PI * 2);
+    ctx.fillStyle = n.meta.color;
+    ctx.fill();
+
+    ctx.fillStyle = n.meta.color;
+    ctx.font = '500 11px IBM Plex Mono';
+    ctx.textAlign = 'center';
+    ctx.fillText(n.meta.name, n.x, n.y - baseR - 14);
+
+    ctx.fillStyle = '#6b7a8d';
+    ctx.font = '300 9px IBM Plex Mono';
+    ctx.fillText(n.meta.axis, n.x, n.y - baseR - 4);
+
+    ctx.fillText('emp ' + (n.empathy * 100).toFixed(0) + '%', n.x, n.y + baseR + 14);
+  });
+
+  animFrame = requestAnimationFrame(draw);
+}
+
+loadGenomes()
+  .then(function(entries) {
+    if (entries.length === 0) {
+      document.getElementById('errorBox').textContent = 'No genomes found.';
+      return;
+    }
+
+    layoutNodes(entries);
+    buildEdges();
+    computeMetrics();
+    buildLegend();
+    animFrame = requestAnimationFrame(draw);
+  })
+  .catch(function(err) {
+    document.getElementById('errorBox').textContent = 'Error: ' + err.message;
+  });
+</script>
+</body>
+</html>

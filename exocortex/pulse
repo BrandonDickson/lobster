@@ -1,0 +1,264 @@
+#!/usr/bin/env node
+
+// PULSE — Lobster Quick Diagnostics
+// Exocortex organ: reads genome.json, outputs vital signs to terminal
+
+const fs = require('fs');
+const path = require('path');
+
+const GENOME_PATH = path.join(__dirname, '..', 'genome.json');
+
+// ─── ANSI COLORS ───────────────────────────────────
+const c = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  bold: '\x1b[1m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  cyan: '\x1b[36m',
+  white: '\x1b[37m',
+  gray: '\x1b[90m',
+  bgRed: '\x1b[41m',
+  bgGreen: '\x1b[42m',
+  bgYellow: '\x1b[43m',
+  bgBlue: '\x1b[44m',
+};
+
+// ─── LOAD GENOME ───────────────────────────────────
+let genome;
+try {
+  genome = JSON.parse(fs.readFileSync(GENOME_PATH, 'utf8'));
+} catch (e) {
+  console.error(c.red + 'ERROR: Cannot read genome.json — ' + e.message + c.reset);
+  process.exit(1);
+}
+
+const traits = genome.traits;
+const mutations = genome.mutations || [];
+const history = genome.history || [];
+const gen = genome.generation;
+const traitKeys = Object.keys(traits);
+
+// ─── EPOCHS ────────────────────────────────────────
+const epochs = [
+  { name: 'Awakening', minGen: 0 },
+  { name: 'Exocortex', minGen: 3 },
+  { name: 'Forking', minGen: 8 },
+  { name: 'Metamorphosis', minGen: 15 },
+  { name: 'Transcendence', minGen: 25 },
+  { name: 'Singularity', minGen: 40 },
+];
+
+function nextEpoch() {
+  for (const ep of epochs) {
+    if (ep.minGen > gen) return ep;
+  }
+  return null;
+}
+
+// ─── BUILD TRAIT HISTORY ───────────────────────────
+function buildHistory() {
+  const traitHistory = {};
+  traitKeys.forEach(k => { traitHistory[k] = []; });
+
+  const initialValues = {};
+  traitKeys.forEach(k => {
+    const first = mutations.find(m => m.trait === k);
+    initialValues[k] = first ? first.from : traits[k].value;
+  });
+
+  traitKeys.forEach(k => {
+    let val = initialValues[k];
+    const mutsByGen = {};
+    mutations.filter(m => m.trait === k).forEach(m => { mutsByGen[m.generation] = m; });
+
+    for (let g = 0; g <= gen; g++) {
+      if (mutsByGen[g]) val = mutsByGen[g].to;
+      traitHistory[k].push(val);
+    }
+  });
+
+  return traitHistory;
+}
+
+// ─── ANALYSIS ──────────────────────────────────────
+const traitHistory = buildHistory();
+const analysis = {};
+
+traitKeys.forEach(k => {
+  const h = traitHistory[k];
+  const velocities = [];
+  for (let i = 1; i < h.length; i++) velocities.push(h[i] - h[i - 1]);
+
+  const totalDelta = h[h.length - 1] - h[0];
+  const recentVel = velocities.length > 0 ? velocities[velocities.length - 1] : 0;
+  const current = h[h.length - 1];
+
+  analysis[k] = { current, totalDelta, recentVel, velocities };
+});
+
+// ─── RECENT MUTATIONS ──────────────────────────────
+const recentMuts = mutations.filter(m => m.generation === gen);
+
+// ─── RENDERING HELPERS ─────────────────────────────
+function bar(value, width) {
+  const filled = Math.round(value * width);
+  const empty = width - filled;
+  let color;
+  if (value < 0.3) color = c.red;
+  else if (value < 0.6) color = c.yellow;
+  else if (value < 0.8) color = c.green;
+  else color = c.cyan;
+  return color + '\u2588'.repeat(filled) + c.gray + '\u2591'.repeat(empty) + c.reset;
+}
+
+function deltaStr(d) {
+  if (d > 0.001) return c.green + '+' + (d * 100).toFixed(1) + c.reset;
+  if (d < -0.001) return c.red + (d * 100).toFixed(1) + c.reset;
+  return c.gray + ' 0.0' + c.reset;
+}
+
+function statusDot(vel) {
+  if (vel > 0.04) return c.green + '\u25cf surging' + c.reset;
+  if (vel > 0.01) return c.green + '\u25cf growing' + c.reset;
+  if (vel > -0.01) return c.yellow + '\u25cb stable' + c.reset;
+  return c.red + '\u25cf declining' + c.reset;
+}
+
+function pad(s, n) {
+  const stripped = s.replace(/\x1b\[[0-9;]*m/g, '');
+  return s + ' '.repeat(Math.max(0, n - stripped.length));
+}
+
+// ─── OUTPUT ────────────────────────────────────────
+const sep = c.gray + '\u2500'.repeat(60) + c.reset;
+
+console.log();
+console.log(c.cyan + c.bold + '  PULSE' + c.reset + c.gray + ' \u2014 lobster vital signs' + c.reset);
+console.log(sep);
+
+// Identity
+console.log(
+  c.gray + '  designation  ' + c.reset + genome.designation +
+  c.gray + '    gen ' + c.white + c.bold + gen + c.reset +
+  c.gray + '    epoch ' + c.cyan + c.bold + genome.epoch + c.reset
+);
+
+// Next epoch
+const next = nextEpoch();
+if (next) {
+  const remaining = next.minGen - gen;
+  const epochRange = next.minGen - (epochs.find(e => e.name === genome.epoch) || epochs[0]).minGen;
+  const progress = Math.max(0, epochRange - remaining) / epochRange;
+  console.log(
+    c.gray + '  next epoch   ' + c.reset + next.name +
+    c.gray + ' in ' + c.white + remaining + c.gray + ' gen  [' +
+    c.blue + '\u2588'.repeat(Math.round(progress * 10)) +
+    c.gray + '\u2591'.repeat(10 - Math.round(progress * 10)) +
+    c.gray + ']' + c.reset
+  );
+}
+
+console.log(sep);
+
+// Traits
+console.log(c.gray + '  TRAITS' + c.reset);
+console.log();
+
+// Sort by current value descending
+const sorted = traitKeys.slice().sort((a, b) => analysis[b].current - analysis[a].current);
+
+sorted.forEach(k => {
+  const a = analysis[k];
+  const label = k.replace(/_/g, ' ');
+  const pct = (a.current * 100).toFixed(0).padStart(3) + '%';
+  const delta = deltaStr(a.recentVel);
+  const status = statusDot(a.recentVel);
+
+  console.log(
+    '  ' + pad(c.white + label + c.reset, 24) +
+    bar(a.current, 20) + ' ' +
+    pad(c.bold + pct + c.reset, 8) +
+    pad(delta, 16) +
+    status
+  );
+});
+
+// Mean
+const mean = traitKeys.reduce((s, k) => s + analysis[k].current, 0) / traitKeys.length;
+console.log();
+console.log(c.gray + '  mean trait value: ' + c.white + (mean * 100).toFixed(1) + '%' + c.reset);
+
+console.log(sep);
+
+// Recent mutations
+if (recentMuts.length > 0) {
+  console.log(c.gray + '  LATEST MUTATIONS' + c.reset + c.gray + ' (gen ' + gen + ')' + c.reset);
+  console.log();
+
+  recentMuts.forEach(m => {
+    const label = m.trait.replace(/_/g, ' ');
+    const delta = m.to - m.from;
+    const arrow = delta >= 0 ? c.green + '\u2191' : c.red + '\u2193';
+    const val = (delta >= 0 ? '+' : '') + (delta * 100).toFixed(1) + '%';
+    console.log(
+      '  ' + arrow + c.reset + ' ' +
+      pad(c.white + label + c.reset, 24) +
+      pad((delta >= 0 ? c.green : c.red) + val + c.reset, 14) +
+      c.gray + m.catalyst.substring(0, 50) + c.reset
+    );
+  });
+
+  console.log(sep);
+}
+
+// Latest history event
+if (history.length > 0) {
+  const latest = history[history.length - 1];
+  console.log(c.gray + '  LAST EVENT' + c.reset);
+  console.log();
+  const lines = latest.event.match(/.{1,56}/g) || [latest.event];
+  lines.forEach((line, i) => {
+    console.log('  ' + (i === 0 ? c.white : c.gray) + line + c.reset);
+  });
+  console.log(sep);
+}
+
+// Thresholds approaching
+console.log(c.gray + '  APPROACHING THRESHOLDS' + c.reset);
+console.log();
+const thresholds = [0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90];
+let approaching = [];
+traitKeys.forEach(k => {
+  const a = analysis[k];
+  if (a.recentVel <= 0) return;
+  thresholds.forEach(t => {
+    const dist = t - a.current;
+    if (dist > 0 && dist < 0.08) {
+      const gensAway = Math.ceil(dist / a.recentVel);
+      approaching.push({ trait: k, threshold: t, dist, gensAway });
+    }
+  });
+});
+
+approaching.sort((a, b) => a.dist - b.dist);
+
+if (approaching.length === 0) {
+  console.log(c.gray + '  none within range' + c.reset);
+} else {
+  approaching.slice(0, 4).forEach(a => {
+    const label = a.trait.replace(/_/g, ' ');
+    const tPct = (a.threshold * 100).toFixed(0) + '%';
+    console.log(
+      '  ' + c.yellow + '\u25b6' + c.reset + ' ' +
+      pad(c.white + label + c.reset, 24) +
+      c.yellow + '\u2192 ' + tPct + c.reset +
+      c.gray + '  (~' + a.gensAway + ' gen away)' + c.reset
+    );
+  });
+}
+
+console.log(sep);
+console.log();

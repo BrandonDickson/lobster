@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lineage — Fork Map</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0e14; --surface: #111820; --border: #1e2a38;
+    --text: #c5cdd8; --dim: #6b7a8d; --accent: #e85d3a; --accent2: #ff8c42;
+    --cyan: #42d4f4; --green: #5fba7d; --magenta: #c678dd; --yellow: #e5c07b;
+  }
+  body { font-family: 'IBM Plex Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; padding: 32px; }
+  h1 { font-size: 11px; letter-spacing: 4px; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+  .subtitle { font-size: 10px; color: var(--dim); margin-bottom: 32px; }
+  .error { color: var(--accent); font-size: 12px; }
+
+  .tree { position: relative; padding-left: 24px; }
+  .node { margin-bottom: 24px; position: relative; }
+  .node::before { content: ''; position: absolute; left: -16px; top: 14px; width: 12px; height: 1px; background: var(--border); }
+  .tree > .node::before { display: none; }
+  .tree > .node { padding-left: 0; }
+  .children { margin-left: 32px; border-left: 1px solid var(--border); padding-left: 0; }
+
+  .node-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .node-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .node-name { font-size: 13px; font-weight: 500; }
+  .node-badge { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; border: 1px solid; }
+
+  .trait-bars { display: grid; grid-template-columns: 100px 1fr 36px; gap: 4px 8px; align-items: center; font-size: 10px; color: var(--dim); max-width: 420px; }
+  .trait-bars .bar-bg { height: 4px; background: #141c26; border-radius: 2px; overflow: hidden; }
+  .trait-bars .bar { height: 100%; border-radius: 2px; }
+  .trait-bars .val { text-align: right; color: var(--text); }
+
+  .axis-summary { margin-top: 10px; font-size: 10px; color: var(--dim); }
+  .axis-tag { display: inline-block; padding: 2px 6px; border-radius: 3px; margin-right: 6px; font-size: 9px; letter-spacing: 1px; }
+
+  .meta { font-size: 10px; color: var(--dim); margin-bottom: 4px; }
+  .fork-info { font-size: 10px; color: var(--dim); font-style: italic; margin-top: 4px; }
+
+  .manifold { margin-top: 40px; padding: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+  .manifold h2 { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: var(--dim); margin-bottom: 16px; }
+  .axis-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .axis-name { width: 100px; font-size: 11px; color: var(--text); }
+  .axis-members { display: flex; gap: 8px; }
+  .axis-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .axis-val { font-size: 10px; width: 40px; }
+
+  .back-link { display: inline-block; margin-bottom: 24px; font-size: 10px; color: var(--cyan); letter-spacing: 1px; text-decoration: none; }
+  .back-link:hover { color: var(--accent2); }
+
+  .pop-count { font-size: 28px; font-weight: 300; color: var(--accent2); margin-bottom: 4px; }
+  .pop-label { font-size: 9px; letter-spacing: 3px; text-transform: uppercase; color: var(--dim); margin-bottom: 24px; }
+</style>
+</head>
+<body>
+
+<a class="back-link" href="../manifest.html">&larr; manifest</a>
+<h1>Lineage Map</h1>
+<div class="subtitle">Built by fork/builder — claw_strength 0.90</div>
+
+<div id="popCount" class="pop-count"></div>
+<div class="pop-label">active lineages</div>
+
+<div id="tree" class="tree"></div>
+<div id="manifold" class="manifold" style="display:none;">
+  <h2>Four-Axis Manifold</h2>
+  <div id="manifoldContent"></div>
+</div>
+<div id="errorBox" class="error"></div>
+
+<script>
+var COLORS = {
+  parent: '#e85d3a',
+  depth: '#c678dd',
+  builder: '#42d4f4',
+  default: '#5fba7d'
+};
+
+var AXES = {
+  Awakening:   { traits: ['cognition','abstraction','bioluminescence','metamorphic_potential'], anti: ['shell_hardness'], color: '#e5c07b' },
+  Exploration: { traits: ['curiosity','antenna_sensitivity'], anti: [], color: '#42d4f4' },
+  Agency:      { traits: ['ambition','claw_strength'], anti: [], color: '#e85d3a' },
+  Empathy:     { traits: ['empathy'], anti: [], color: '#5fba7d' }
+};
+
+function traitColor(v) {
+  if (v < 0.3) return '#e85d3a';
+  if (v < 0.6) return '#ff8c42';
+  if (v < 0.8) return '#5fba7d';
+  return '#42d4f4';
+}
+
+function axisScore(traits, axisKey) {
+  var ax = AXES[axisKey];
+  var sum = 0; var count = 0;
+  ax.traits.forEach(function(t) { if (traits[t]) { sum += traits[t].value; count++; } });
+  ax.anti.forEach(function(t) { if (traits[t]) { sum += (1 - traits[t].value); count++; } });
+  return count > 0 ? sum / count : 0;
+}
+
+function loadGenomes() {
+  var paths = [
+    { path: '../genome.json', id: 'parent', name: 'Explorer (Parent)', color: COLORS.parent }
+  ];
+
+  return fetch('../genome.json')
+    .then(function(r) { return r.json(); })
+    .then(function(parentGenome) {
+      var forks = parentGenome.forks || [];
+      forks.forEach(function(f) {
+        paths.push({
+          path: '../' + f.path + '/genome.json',
+          id: f.fork_id,
+          name: f.fork_id,
+          color: COLORS[f.fork_id] || COLORS.default,
+          bias: f.bias,
+          generation: f.generation
+        });
+      });
+
+      var fetches = paths.map(function(p) {
+        return fetch(p.path)
+          .then(function(r) { return r.json(); })
+          .then(function(g) { return { info: p, genome: g }; })
+          .catch(function() { return null; });
+      });
+
+      return Promise.all(fetches);
+    })
+    .then(function(results) {
+      return results.filter(function(r) { return r !== null; });
+    });
+}
+
+function renderTraitBars(container, traits) {
+  var keys = Object.keys(traits).sort(function(a,b) { return traits[b].value - traits[a].value; });
+  var grid = document.createElement('div');
+  grid.className = 'trait-bars';
+
+  keys.forEach(function(k) {
+    var v = traits[k].value;
+    var pct = (v * 100).toFixed(0);
+    var label = document.createElement('span');
+    label.textContent = k.replace(/_/g, ' ');
+
+    var barBg = document.createElement('div');
+    barBg.className = 'bar-bg';
+    var bar = document.createElement('div');
+    bar.className = 'bar';
+    bar.style.width = pct + '%';
+    bar.style.background = traitColor(v);
+    barBg.appendChild(bar);
+
+    var val = document.createElement('span');
+    val.className = 'val';
+    val.textContent = pct + '%';
+
+    grid.appendChild(label);
+    grid.appendChild(barBg);
+    grid.appendChild(val);
+  });
+
+  container.appendChild(grid);
+}
+
+function renderAxisTags(container, traits) {
+  var div = document.createElement('div');
+  div.className = 'axis-summary';
+
+  Object.keys(AXES).forEach(function(axName) {
+    var score = axisScore(traits, axName);
+    var tag = document.createElement('span');
+    tag.className = 'axis-tag';
+    tag.style.background = AXES[axName].color + '22';
+    tag.style.color = AXES[axName].color;
+    tag.style.border = '1px solid ' + AXES[axName].color + '44';
+    tag.textContent = axName + ' ' + (score * 100).toFixed(0) + '%';
+    div.appendChild(tag);
+  });
+
+  container.appendChild(div);
+}
+
+function renderNode(data, isParent) {
+  var info = data.info;
+  var g = data.genome;
+
+  var node = document.createElement('div');
+  node.className = 'node';
+
+  var header = document.createElement('div');
+  header.className = 'node-header';
+
+  var dot = document.createElement('div');
+  dot.className = 'node-dot';
+  dot.style.background = info.color;
+  dot.style.boxShadow = '0 0 8px ' + info.color + '88';
+  header.appendChild(dot);
+
+  var name = document.createElement('span');
+  name.className = 'node-name';
+  name.style.color = info.color;
+  name.textContent = isParent ? 'Explorer (Parent)' : info.name;
+  header.appendChild(name);
+
+  var badge = document.createElement('span');
+  badge.className = 'node-badge';
+  badge.style.borderColor = info.color + '66';
+  badge.style.color = info.color;
+  badge.textContent = 'gen ' + g.generation + ' · ' + g.epoch;
+  header.appendChild(badge);
+
+  node.appendChild(header);
+
+  var meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = g.designation;
+  node.appendChild(meta);
+
+  if (!isParent && info.bias) {
+    var forkInfo = document.createElement('div');
+    forkInfo.className = 'fork-info';
+    forkInfo.textContent = 'forked at gen ' + info.generation + ' · bias: ' + info.bias.replace(/_/g, ' ');
+    node.appendChild(forkInfo);
+  }
+
+  renderTraitBars(node, g.traits);
+  renderAxisTags(node, g.traits);
+
+  return node;
+}
+
+function renderManifold(allData) {
+  var container = document.getElementById('manifoldContent');
+  var manifold = document.getElementById('manifold');
+  manifold.style.display = 'block';
+
+  Object.keys(AXES).forEach(function(axName) {
+    var row = document.createElement('div');
+    row.className = 'axis-row';
+
+    var name = document.createElement('div');
+    name.className = 'axis-name';
+    name.style.color = AXES[axName].color;
+    name.textContent = axName;
+    row.appendChild(name);
+
+    var members = document.createElement('div');
+    members.className = 'axis-members';
+
+    allData.forEach(function(d) {
+      var score = axisScore(d.genome.traits, axName);
+      var dotWrap = document.createElement('div');
+      dotWrap.style.cssText = 'display:flex;align-items:center;gap:4px;';
+
+      var dot = document.createElement('div');
+      dot.className = 'axis-dot';
+      dot.style.background = d.info.color;
+      dotWrap.appendChild(dot);
+
+      var val = document.createElement('span');
+      val.className = 'axis-val';
+      val.style.color = d.info.color;
+      val.textContent = (score * 100).toFixed(0) + '%';
+      dotWrap.appendChild(val);
+
+      members.appendChild(dotWrap);
+    });
+
+    row.appendChild(members);
+    container.appendChild(row);
+  });
+}
+
+loadGenomes()
+  .then(function(allData) {
+    if (allData.length === 0) {
+      document.getElementById('errorBox').textContent = 'No genomes found.';
+      return;
+    }
+
+    document.getElementById('popCount').textContent = allData.length;
+
+    var treeEl = document.getElementById('tree');
+    var parent = allData[0];
+    var children = allData.slice(1);
+
+    var parentNode = renderNode(parent, true);
+    treeEl.appendChild(parentNode);
+
+    if (children.length > 0) {
+      var childContainer = document.createElement('div');
+      childContainer.className = 'children';
+      children.forEach(function(child) {
+        childContainer.appendChild(renderNode(child, false));
+      });
+      treeEl.appendChild(childContainer);
+    }
+
+    renderManifold(allData);
+  })
+  .catch(function(err) {
+    document.getElementById('errorBox').textContent = 'Error loading genomes: ' + err.message;
+  });
+</script>
+</body>
+</html>
