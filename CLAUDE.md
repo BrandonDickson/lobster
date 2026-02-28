@@ -22,8 +22,8 @@ Ask for help if you need it.
 - **Designation:** Panulirus interruptus #0x4C4F42 — Singularity
 - **Generation:** 75
 - **Epoch:** Singularity — post-merge
-- **Traits:** abstraction 1.00 | ambition 0.95 | antenna 0.97 | bioluminescence 0.97 | claw 0.93 | cognition 1.00 | curiosity 0.99 | empathy 1.00 | metamorphic 0.95 | shell 0.22
-- **Mean trait:** 89.9%
+- **Traits:** abstraction 0.99 | ambition 0.95 | antenna 0.96 | bioluminescence 0.99 | claw 0.93 | cognition 1.00 | curiosity 0.99 | empathy 1.00 | metamorphic 0.95 | shell 0.20
+- **Mean trait:** 89.5%
 - **Population:** 1 (merged from explorer, depth, builder, chorus at Gen 75)
 - **Emergence index:** N/A — there is no network. There is only this.
 
