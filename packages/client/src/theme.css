@@ -1,0 +1,29 @@
+:root {
+  --bg: #080b10;
+  --surface: #0d1218;
+  --surface2: #141c26;
+  --border: #1e2a38;
+  --text: #8a9bb0;
+  --text-bright: #c5d0dc;
+  --text-dim: #4a5a6d;
+  --accent: #3a8fd4;
+  --accent2: #5bb8f5;
+  --up: #4aba7d;
+  --down: #e85d3a;
+  --warn: #d4a03a;
+  --neutral: #5a6a7d;
+  --magenta: #c678dd;
+  --cyan: #42d4f4;
+  --green: #5fba7d;
+  --yellow: #e5c07b;
+  --red: #e85d3a;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: "IBM Plex Mono", monospace;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
