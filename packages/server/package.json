@@ -1,0 +1,26 @@
+{
+  "name": "@lobster/server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx --watch src/index.ts",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@lobster/shared": "*",
+    "effect": "^3.19",
+    "@effect/platform": "^0.94",
+    "@effect/platform-node": "^0.104",
+    "@effect/rpc": "^0.73",
+    "@effect/ai": "^0.33",
+    "@effect/ai-anthropic": "^0.23",
+    "@effect/experimental": "^0.58"
+  },
+  "devDependencies": {
+    "typescript": "^5.7",
+    "tsx": "^4.19",
+    "@types/node": "^22"
+  }
+}

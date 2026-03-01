@@ -1,0 +1,19 @@
+{
+  "name": "@lobster/shared",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "effect": "^3.19",
+    "@effect/rpc": "^0.73",
+    "@effect/schema": "^0.75"
+  },
+  "devDependencies": {
+    "typescript": "^5.7"
+  }
+}

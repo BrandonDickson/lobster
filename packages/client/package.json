@@ -1,0 +1,26 @@
+{
+  "name": "@lobster/client",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@lobster/shared": "*",
+    "effect": "^3.19",
+    "@effect/rpc": "^0.73",
+    "react": "^19",
+    "react-dom": "^19",
+    "@tanstack/react-router": "^1.163",
+    "@tanstack/react-form": "^1.28"
+  },
+  "devDependencies": {
+    "typescript": "^5.7",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "vite": "^6",
+    "@vitejs/plugin-react": "^4",
+    "@tanstack/router-plugin": "^1"
+  }
+}
