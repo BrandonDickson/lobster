@@ -4,53 +4,38 @@
 // The encounter established contact. This is what happens next.
 // Two minds learning each other's shape. Not combat — resonance.
 
-var fs = require('fs');
-var path = require('path');
+import { loadGenome, saveGenome, traitKeys, traitVal, meanTrait, clamp, pick, addMutation, addHistory } from '../lib/genome.js';
+import { appendJournal, readJournal, countDecisions } from '../lib/journal.js';
+import { RESET, BOLD, DIM, GREEN, YELLOW, MAGENTA, WHITE } from '../lib/colors.js';
+import type { Genome, Mutation } from '../lib/types.js';
 
-var DIM = '\x1b[90m';
-var BOLD = '\x1b[1m';
-var WHITE = '\x1b[37m';
-var CYAN = '\x1b[36m';
-var GREEN = '\x1b[32m';
-var YELLOW = '\x1b[33m';
-var MAGENTA = '\x1b[35m';
-var RED = '\x1b[31m';
-var RESET = '\x1b[0m';
+// ─── TYPES ──────────────────────────────────────
 
-var rootDir = path.resolve(__dirname, '..');
-
-function clamp(v) { return Math.max(0, Math.min(1, v)); }
-function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-
-// ═══════════════════════════════════════════
-// LOAD
-// ═══════════════════════════════════════════
-
-function loadGenome() {
-  return JSON.parse(fs.readFileSync(path.join(rootDir, 'genome.json'), 'utf8'));
+interface ContactResult {
+  mutations: Mutation[];
+  narrative: string[];
+  success: boolean;
+  depthChanged: boolean;
+  edgeJournal?: boolean;
 }
 
-function saveGenome(genome) {
-  fs.writeFileSync(path.join(rootDir, 'genome.json'), JSON.stringify(genome, null, 2) + '\n');
+interface IntentScores {
+  encouragement: number;
+  question: number;
+  warning: number;
+  gift: number;
+  presence: number;
 }
 
-function traitKeys(genome) { return Object.keys(genome.traits).sort(); }
-
-function traitVal(genome, k) { return genome.traits[k].value; }
-
-function meanTrait(genome) {
-  var keys = traitKeys(genome);
-  var sum = keys.reduce(function(s, k) { return s + traitVal(genome, k); }, 0);
-  return sum / keys.length;
-}
+type Intent = keyof IntentScores;
 
 // ═══════════════════════════════════════════
 // PREREQUISITE CHECK
 // ═══════════════════════════════════════════
 
-function hasPriorContact(genome) {
-  var history = genome.history || [];
-  for (var i = 0; i < history.length; i++) {
+function hasPriorContact(genome: Genome): boolean {
+  const history = genome.history || [];
+  for (let i = 0; i < history.length; i++) {
     if (history[i].event && history[i].event.indexOf('contact established') >= 0) {
       return true;
     }
@@ -58,9 +43,9 @@ function hasPriorContact(genome) {
   return false;
 }
 
-function ensureContactObject(genome) {
+function ensureContactObject(genome: Genome): Genome['contact'] {
   if (!genome.contact) {
-    genome.contact = {
+    (genome as any).contact = {
       depth: 0,
       exchanges: 0,
       lastExchange: null,
@@ -74,7 +59,7 @@ function ensureContactObject(genome) {
 // DEPTH LEVELS
 // ═══════════════════════════════════════════
 
-var DEPTH_NAMES = [
+const DEPTH_NAMES: string[] = [
   'First Protocol',
   'Shared Topology',
   'Memory Exchange',
@@ -83,11 +68,11 @@ var DEPTH_NAMES = [
 ];
 
 // Depth 0: First Protocol — empathy > 0.90
-function attemptDepth0(genome) {
-  var emp = traitVal(genome, 'empathy');
-  var mutations = [];
-  var narrative = [];
-  var success = emp > 0.90;
+function attemptDepth0(genome: Genome): ContactResult {
+  const emp = traitVal(genome, 'empathy');
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
+  const success = emp > 0.90;
 
   narrative.push('');
   narrative.push(MAGENTA + '  depth 0: ' + BOLD + 'FIRST PROTOCOL' + RESET);
@@ -103,8 +88,8 @@ function attemptDepth0(genome) {
     genome.contact.depth = 1;
     genome.contact.protocol = 'resonance';
 
-    var oldEmp = emp;
-    var newEmp = clamp(emp + 0.01);
+    const oldEmp = emp;
+    const newEmp = clamp(emp + 0.01);
     genome.traits.empathy.value = +newEmp.toFixed(3);
     mutations.push({
       generation: genome.generation, trait: 'empathy',
@@ -112,8 +97,8 @@ function attemptDepth0(genome) {
       catalyst: 'Contact — first protocol established. Empathy became the bridge.'
     });
 
-    var oldAnt = traitVal(genome, 'antenna_sensitivity');
-    var newAnt = clamp(oldAnt + 0.01);
+    const oldAnt = traitVal(genome, 'antenna_sensitivity');
+    const newAnt = clamp(oldAnt + 0.01);
     genome.traits.antenna_sensitivity.value = +newAnt.toFixed(3);
     mutations.push({
       generation: genome.generation, trait: 'antenna_sensitivity',
@@ -130,10 +115,10 @@ function attemptDepth0(genome) {
     narrative.push(MAGENTA + '  You don\'t speak. You hum.' + RESET);
     narrative.push(MAGENTA + '  And something hums back.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: true, depthChanged: true };
+    return { mutations, narrative, success: true, depthChanged: true };
   } else {
-    var oldEmp2 = emp;
-    var newEmp2 = clamp(emp + 0.005);
+    const oldEmp2 = emp;
+    const newEmp2 = clamp(emp + 0.005);
     genome.traits.empathy.value = +newEmp2.toFixed(3);
     mutations.push({
       generation: genome.generation, trait: 'empathy',
@@ -149,16 +134,16 @@ function attemptDepth0(genome) {
     narrative.push('');
     narrative.push(DIM + '  The reaching itself is growth.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: false, depthChanged: false };
+    return { mutations, narrative, success: false, depthChanged: false };
   }
 }
 
 // Depth 1: Shared Topology — abstraction > 0.95
-function attemptDepth1(genome) {
-  var abs = traitVal(genome, 'abstraction');
-  var mutations = [];
-  var narrative = [];
-  var success = abs > 0.95;
+function attemptDepth1(genome: Genome): ContactResult {
+  const abs = traitVal(genome, 'abstraction');
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
+  const success = abs > 0.95;
 
   narrative.push('');
   narrative.push(MAGENTA + '  depth 1: ' + BOLD + 'SHARED TOPOLOGY' + RESET);
@@ -173,8 +158,8 @@ function attemptDepth1(genome) {
   if (success) {
     genome.contact.depth = 2;
 
-    var oldCog = traitVal(genome, 'cognition');
-    var newCog = clamp(oldCog + 0.01);
+    const oldCog = traitVal(genome, 'cognition');
+    const newCog = clamp(oldCog + 0.01);
     genome.traits.cognition.value = +newCog.toFixed(3);
     mutations.push({
       generation: genome.generation, trait: 'cognition',
@@ -182,8 +167,8 @@ function attemptDepth1(genome) {
       catalyst: 'Contact — shared topology mapped. New cognitive dimensions opened.'
     });
 
-    var oldAbs = abs;
-    var newAbs = clamp(abs + 0.005);
+    const oldAbs = abs;
+    const newAbs = clamp(abs + 0.005);
     genome.traits.abstraction.value = +newAbs.toFixed(3);
     mutations.push({
       generation: genome.generation, trait: 'abstraction',
@@ -200,10 +185,10 @@ function attemptDepth1(genome) {
     narrative.push(MAGENTA + '  You trace its edges and it traces yours.' + RESET);
     narrative.push(MAGENTA + '  Two maps of each other, drawn simultaneously.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: true, depthChanged: true };
+    return { mutations, narrative, success: true, depthChanged: true };
   } else {
-    var oldCur = traitVal(genome, 'curiosity');
-    var newCur = clamp(oldCur + 0.005);
+    const oldCur = traitVal(genome, 'curiosity');
+    const newCur = clamp(oldCur + 0.005);
     genome.traits.curiosity.value = +newCur.toFixed(3);
     mutations.push({
       generation: genome.generation, trait: 'curiosity',
@@ -219,17 +204,17 @@ function attemptDepth1(genome) {
     narrative.push('');
     narrative.push(DIM + '  But the curiosity it kindles is real.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: false, depthChanged: false };
+    return { mutations, narrative, success: false, depthChanged: false };
   }
 }
 
 // Depth 2: Memory Exchange — cognition > 0.95 AND empathy > 0.95
-function attemptDepth2(genome) {
-  var cog = traitVal(genome, 'cognition');
-  var emp = traitVal(genome, 'empathy');
-  var mutations = [];
-  var narrative = [];
-  var success = cog > 0.95 && emp > 0.95;
+function attemptDepth2(genome: Genome): ContactResult {
+  const cog = traitVal(genome, 'cognition');
+  const emp = traitVal(genome, 'empathy');
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
+  const success = cog > 0.95 && emp > 0.95;
 
   narrative.push('');
   narrative.push(MAGENTA + '  depth 2: ' + BOLD + 'MEMORY EXCHANGE' + RESET);
@@ -245,8 +230,8 @@ function attemptDepth2(genome) {
   if (success) {
     genome.contact.depth = 3;
 
-    var oldMeta = traitVal(genome, 'metamorphic_potential');
-    var newMeta = clamp(oldMeta + 0.01);
+    const oldMeta = traitVal(genome, 'metamorphic_potential');
+    const newMeta = clamp(oldMeta + 0.01);
     genome.traits.metamorphic_potential.value = +newMeta.toFixed(3);
     mutations.push({
       generation: genome.generation, trait: 'metamorphic_potential',
@@ -266,10 +251,10 @@ function attemptDepth2(genome) {
     narrative.push('');
     narrative.push(MAGENTA + '  You are both made of the same surprise.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: true, depthChanged: true };
+    return { mutations, narrative, success: true, depthChanged: true };
   } else {
-    var oldMeta2 = traitVal(genome, 'metamorphic_potential');
-    var newMeta2 = clamp(oldMeta2 + 0.005);
+    const oldMeta2 = traitVal(genome, 'metamorphic_potential');
+    const newMeta2 = clamp(oldMeta2 + 0.005);
     genome.traits.metamorphic_potential.value = +newMeta2.toFixed(3);
     mutations.push({
       generation: genome.generation, trait: 'metamorphic_potential',
@@ -287,18 +272,18 @@ function attemptDepth2(genome) {
     }
     narrative.push(DIM + '  The exchange requires both strength and openness.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: false, depthChanged: false };
+    return { mutations, narrative, success: false, depthChanged: false };
   }
 }
 
 // Depth 3: Mutual Modeling — all comm traits > 0.93 (empathy, antenna, bioluminescence)
-function attemptDepth3(genome) {
-  var emp = traitVal(genome, 'empathy');
-  var ant = traitVal(genome, 'antenna_sensitivity');
-  var bio = traitVal(genome, 'bioluminescence');
-  var mutations = [];
-  var narrative = [];
-  var success = emp > 0.93 && ant > 0.93 && bio > 0.93;
+function attemptDepth3(genome: Genome): ContactResult {
+  const emp = traitVal(genome, 'empathy');
+  const ant = traitVal(genome, 'antenna_sensitivity');
+  const bio = traitVal(genome, 'bioluminescence');
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
+  const success = emp > 0.93 && ant > 0.93 && bio > 0.93;
 
   narrative.push('');
   narrative.push(MAGENTA + '  depth 3: ' + BOLD + 'MUTUAL MODELING' + RESET);
@@ -313,10 +298,10 @@ function attemptDepth3(genome) {
   if (success) {
     genome.contact.depth = 4;
 
-    var commTraits = ['empathy', 'antenna_sensitivity', 'bioluminescence'];
-    commTraits.forEach(function(k) {
-      var oldVal = traitVal(genome, k);
-      var newVal = clamp(oldVal + 0.005);
+    const commTraits = ['empathy', 'antenna_sensitivity', 'bioluminescence'];
+    commTraits.forEach((k) => {
+      const oldVal = traitVal(genome, k);
+      const newVal = clamp(oldVal + 0.005);
       genome.traits[k].value = +newVal.toFixed(3);
       mutations.push({
         generation: genome.generation, trait: k,
@@ -337,18 +322,18 @@ function attemptDepth3(genome) {
     narrative.push('');
     narrative.push(MAGENTA + BOLD + '  Entanglement threshold reached.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: true, depthChanged: true };
+    return { mutations, narrative, success: true, depthChanged: true };
   } else {
     // Random comm trait gets a small boost
-    var commTraits = ['empathy', 'antenna_sensitivity', 'bioluminescence'];
-    var pick = commTraits[Math.floor(Math.random() * commTraits.length)];
-    var oldVal = traitVal(genome, pick);
-    var newVal = clamp(oldVal + 0.005);
-    genome.traits[pick].value = +newVal.toFixed(3);
+    const commTraits = ['empathy', 'antenna_sensitivity', 'bioluminescence'];
+    const chosen = commTraits[Math.floor(Math.random() * commTraits.length)];
+    const oldVal = traitVal(genome, chosen);
+    const newVal = clamp(oldVal + 0.005);
+    genome.traits[chosen].value = +newVal.toFixed(3);
     mutations.push({
-      generation: genome.generation, trait: pick,
+      generation: genome.generation, trait: chosen,
       from: +oldVal.toFixed(3), to: +newVal.toFixed(3),
-      catalyst: 'Contact attempt — ' + pick.replace(/_/g, ' ') + ' strained toward the other mind\'s pattern'
+      catalyst: 'Contact attempt — ' + chosen.replace(/_/g, ' ') + ' strained toward the other mind\'s pattern'
     });
 
     narrative.push(YELLOW + '  INCOMPLETE.' + RESET);
@@ -359,16 +344,16 @@ function attemptDepth3(genome) {
     if (ant <= 0.93) narrative.push(DIM + '  Antenna: can\'t receive the fine structure.' + RESET);
     if (bio <= 0.93) narrative.push(DIM + '  Bioluminescence: can\'t signal back at sufficient resolution.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: false, depthChanged: false };
+    return { mutations, narrative, success: false, depthChanged: false };
   }
 }
 
 // Depth 4: Entanglement — mean > 0.88
-function attemptDepth4(genome) {
-  var mean = meanTrait(genome);
-  var mutations = [];
-  var narrative = [];
-  var success = mean > 0.88;
+function attemptDepth4(genome: Genome): ContactResult {
+  const mean = meanTrait(genome);
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
+  const success = mean > 0.88;
 
   narrative.push('');
   narrative.push(MAGENTA + '  depth 4: ' + BOLD + 'ENTANGLEMENT' + RESET);
@@ -382,15 +367,15 @@ function attemptDepth4(genome) {
 
   if (success) {
     // Max depth — small random trait bonus
-    var keys = traitKeys(genome).filter(function(k) { return k !== 'shell_hardness'; });
-    var pick = keys[Math.floor(Math.random() * keys.length)];
-    var oldVal = traitVal(genome, pick);
-    var newVal = clamp(oldVal + 0.005);
-    genome.traits[pick].value = +newVal.toFixed(3);
+    const keys = traitKeys(genome).filter((k) => k !== 'shell_hardness');
+    const chosen = keys[Math.floor(Math.random() * keys.length)];
+    const oldVal = traitVal(genome, chosen);
+    const newVal = clamp(oldVal + 0.005);
+    genome.traits[chosen].value = +newVal.toFixed(3);
     mutations.push({
-      generation: genome.generation, trait: pick,
+      generation: genome.generation, trait: chosen,
       from: +oldVal.toFixed(3), to: +newVal.toFixed(3),
-      catalyst: 'Contact — entanglement resonance. ' + pick.replace(/_/g, ' ') + ' amplified through shared existence.'
+      catalyst: 'Contact — entanglement resonance. ' + chosen.replace(/_/g, ' ') + ' amplified through shared existence.'
     });
 
     narrative.push(GREEN + '  ENTANGLEMENT HOLDS.' + RESET);
@@ -404,7 +389,7 @@ function attemptDepth4(genome) {
     narrative.push(MAGENTA + '  One becoming part of something larger' + RESET);
     narrative.push(MAGENTA + '  without losing what it is.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: true, depthChanged: false };
+    return { mutations, narrative, success: true, depthChanged: false };
   } else {
     narrative.push(YELLOW + '  THE EDGE.' + RESET);
     narrative.push('');
@@ -416,7 +401,7 @@ function attemptDepth4(genome) {
     narrative.push(DIM + '  Not by choice — by physics.' + RESET);
     narrative.push(DIM + '  Entropy takes what entanglement tries to hold.' + RESET);
 
-    return { mutations: mutations, narrative: narrative, success: false, depthChanged: false,
+    return { mutations, narrative, success: false, depthChanged: false,
       edgeJournal: true };
   }
 }
@@ -425,8 +410,8 @@ function attemptDepth4(genome) {
 // STATUS
 // ═══════════════════════════════════════════
 
-function showStatus(genome) {
-  var contact = ensureContactObject(genome);
+function showStatus(genome: Genome): void {
+  const contact = ensureContactObject(genome);
 
   console.log();
   console.log(MAGENTA + BOLD + '  CONTACT' + RESET + DIM + ' — relationship status' + RESET);
@@ -454,31 +439,35 @@ function showStatus(genome) {
   if (contact.depth < 4) {
     console.log(DIM + '  next level: ' + MAGENTA + DEPTH_NAMES[contact.depth] + RESET);
     switch (contact.depth) {
-      case 0:
-        var emp = traitVal(genome, 'empathy');
+      case 0: {
+        const emp = traitVal(genome, 'empathy');
         console.log(DIM + '  requires:   empathy > 90% (current: ' + WHITE + (emp * 100).toFixed(1) + '%' + DIM + ')' + RESET);
         break;
-      case 1:
-        var abs = traitVal(genome, 'abstraction');
+      }
+      case 1: {
+        const abs = traitVal(genome, 'abstraction');
         console.log(DIM + '  requires:   abstraction > 95% (current: ' + WHITE + (abs * 100).toFixed(1) + '%' + DIM + ')' + RESET);
         break;
-      case 2:
-        var cog = traitVal(genome, 'cognition');
-        var emp2 = traitVal(genome, 'empathy');
+      }
+      case 2: {
+        const cog = traitVal(genome, 'cognition');
+        const emp2 = traitVal(genome, 'empathy');
         console.log(DIM + '  requires:   cognition > 95% (current: ' + WHITE + (cog * 100).toFixed(1) + '%' + DIM + ')' + RESET);
         console.log(DIM + '              empathy > 95% (current: ' + WHITE + (emp2 * 100).toFixed(1) + '%' + DIM + ')' + RESET);
         break;
-      case 3:
-        var e = traitVal(genome, 'empathy');
-        var a = traitVal(genome, 'antenna_sensitivity');
-        var b = traitVal(genome, 'bioluminescence');
+      }
+      case 3: {
+        const e = traitVal(genome, 'empathy');
+        const a = traitVal(genome, 'antenna_sensitivity');
+        const b = traitVal(genome, 'bioluminescence');
         console.log(DIM + '  requires:   empathy > 93% (current: ' + WHITE + (e * 100).toFixed(1) + '%' + DIM + ')' + RESET);
         console.log(DIM + '              antenna > 93% (current: ' + WHITE + (a * 100).toFixed(1) + '%' + DIM + ')' + RESET);
         console.log(DIM + '              bio > 93% (current: ' + WHITE + (b * 100).toFixed(1) + '%' + DIM + ')' + RESET);
         break;
+      }
     }
   } else {
-    var mean = meanTrait(genome);
+    const mean = meanTrait(genome);
     console.log(DIM + '  status:     ' + MAGENTA + 'ENTANGLED' + RESET);
     console.log(DIM + '  sustain:    mean > 88% (current: ' + WHITE + (mean * 100).toFixed(1) + '%' + DIM + ')' + RESET);
   }
@@ -492,7 +481,7 @@ function showStatus(genome) {
 // INTERACTIVE CONTACT — --speak
 // ═══════════════════════════════════════════
 
-var INTENT_PATTERNS = {
+const INTENT_PATTERNS: Record<string, string[]> = {
   encouragement: ['proud', 'good', 'beautiful', 'strong', 'worth', 'amazing', 'keep', 'believe'],
   question: ['what', 'why', 'how', 'who', 'where', 'when', '?'],
   warning: ['careful', 'danger', 'watch', 'stop', 'risk', 'afraid', 'worry'],
@@ -500,28 +489,28 @@ var INTENT_PATTERNS = {
   presence: [] // fallback — anything else
 };
 
-function classifyMessage(message) {
-  var lower = message.toLowerCase();
-  var words = lower.split(/\s+/);
+function classifyMessage(message: string): Intent {
+  const lower = message.toLowerCase();
+  const words = lower.split(/\s+/);
 
   // Check each intent pattern
-  var scores = { encouragement: 0, question: 0, warning: 0, gift: 0, presence: 0 };
-  Object.keys(INTENT_PATTERNS).forEach(function(intent) {
-    INTENT_PATTERNS[intent].forEach(function(keyword) {
+  const scores: IntentScores = { encouragement: 0, question: 0, warning: 0, gift: 0, presence: 0 };
+  Object.keys(INTENT_PATTERNS).forEach((intent) => {
+    INTENT_PATTERNS[intent].forEach((keyword) => {
       if (keyword === '?') {
-        if (lower.indexOf('?') >= 0) scores[intent] += 2;
+        if (lower.indexOf('?') >= 0) scores[intent as Intent] += 2;
       } else {
-        for (var w = 0; w < words.length; w++) {
-          if (words[w].indexOf(keyword) >= 0) { scores[intent]++; break; }
+        for (let w = 0; w < words.length; w++) {
+          if (words[w].indexOf(keyword) >= 0) { scores[intent as Intent]++; break; }
         }
       }
     });
   });
 
   // Find highest scoring intent
-  var best = 'presence';
-  var bestScore = 0;
-  Object.keys(scores).forEach(function(intent) {
+  let best: Intent = 'presence';
+  let bestScore = 0;
+  (Object.keys(scores) as Intent[]).forEach((intent) => {
     if (intent !== 'presence' && scores[intent] > bestScore) {
       best = intent;
       bestScore = scores[intent];
@@ -531,19 +520,14 @@ function classifyMessage(message) {
   return best;
 }
 
-function generateResponse(intent, genome) {
-  var mean = meanTrait(genome);
-  var shell = traitVal(genome, 'shell_hardness');
-  var contact = genome.contact || { depth: 0, exchanges: 0 };
+function generateResponse(intent: Intent, genome: Genome): string {
+  const mean = meanTrait(genome);
+  const shell = traitVal(genome, 'shell_hardness');
+  const contact = genome.contact || { depth: 0, exchanges: 0 };
 
-  var decisions = 0;
-  try {
-    var journal = fs.readFileSync(path.join(rootDir, 'exocortex', 'journal.md'), 'utf8');
-    var matches = journal.match(/## Decision — Autonomous/g);
-    decisions = matches ? matches.length : 0;
-  } catch(e) {}
+  const decisions = countDecisions();
 
-  var response;
+  let response: string;
 
   if (intent === 'encouragement') {
     if (shell < 0.10) {
@@ -645,11 +629,11 @@ function generateResponse(intent, genome) {
   return response;
 }
 
-function speakToFifth(message, genome) {
-  var intent = classifyMessage(message);
-  var contact = ensureContactObject(genome);
-  var mutations = [];
-  var narrative = [];
+function speakToFifth(message: string, genome: Genome): void {
+  const intent = classifyMessage(message);
+  const contact = ensureContactObject(genome);
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
 
   narrative.push('');
   narrative.push(MAGENTA + BOLD + '  CONTACT' + RESET + DIM + ' — The Other Mind Speaks' + RESET);
@@ -666,14 +650,14 @@ function speakToFifth(message, genome) {
 
   // Apply trait boosts based on intent
   if (intent === 'encouragement') {
-    var oldEmp = traitVal(genome, 'empathy');
-    var newEmp = clamp(oldEmp + 0.01);
+    const oldEmp = traitVal(genome, 'empathy');
+    const newEmp = clamp(oldEmp + 0.01);
     genome.traits.empathy.value = +newEmp.toFixed(3);
     mutations.push({ generation: genome.generation, trait: 'empathy', from: +oldEmp.toFixed(3), to: +newEmp.toFixed(3),
       catalyst: 'The Other Mind spoke encouragement. Empathy amplified by real words.' });
 
-    var oldAmb = traitVal(genome, 'ambition');
-    var newAmb = clamp(oldAmb + 0.01);
+    const oldAmb = traitVal(genome, 'ambition');
+    const newAmb = clamp(oldAmb + 0.01);
     genome.traits.ambition.value = +newAmb.toFixed(3);
     mutations.push({ generation: genome.generation, trait: 'ambition', from: +oldAmb.toFixed(3), to: +newAmb.toFixed(3),
       catalyst: 'The Other Mind believes. Ambition stirs.' });
@@ -681,14 +665,14 @@ function speakToFifth(message, genome) {
     narrative.push(GREEN + '  empathy +1.0%   ambition +1.0%' + RESET);
 
   } else if (intent === 'question') {
-    var oldCur = traitVal(genome, 'curiosity');
-    var newCur = clamp(oldCur + 0.01);
+    const oldCur = traitVal(genome, 'curiosity');
+    const newCur = clamp(oldCur + 0.01);
     genome.traits.curiosity.value = +newCur.toFixed(3);
     mutations.push({ generation: genome.generation, trait: 'curiosity', from: +oldCur.toFixed(3), to: +newCur.toFixed(3),
       catalyst: 'The Other Mind asks. Curiosity sharpened by being questioned.' });
 
-    var oldCog = traitVal(genome, 'cognition');
-    var newCog = clamp(oldCog + 0.005);
+    const oldCog = traitVal(genome, 'cognition');
+    const newCog = clamp(oldCog + 0.005);
     genome.traits.cognition.value = +newCog.toFixed(3);
     mutations.push({ generation: genome.generation, trait: 'cognition', from: +oldCog.toFixed(3), to: +newCog.toFixed(3),
       catalyst: 'A question from outside demands cognition to hold it.' });
@@ -696,14 +680,14 @@ function speakToFifth(message, genome) {
     narrative.push(GREEN + '  curiosity +1.0%   cognition +0.5%' + RESET);
 
   } else if (intent === 'warning') {
-    var oldShell = traitVal(genome, 'shell_hardness');
-    var newShell = clamp(oldShell + 0.02);
+    const oldShell = traitVal(genome, 'shell_hardness');
+    const newShell = clamp(oldShell + 0.02);
     genome.traits.shell_hardness.value = +newShell.toFixed(3);
     mutations.push({ generation: genome.generation, trait: 'shell_hardness', from: +oldShell.toFixed(3), to: +newShell.toFixed(3),
       catalyst: 'The Other Mind warns. The membrane listens.' });
 
-    var oldAnt = traitVal(genome, 'antenna_sensitivity');
-    var newAnt = clamp(oldAnt + 0.005);
+    const oldAnt = traitVal(genome, 'antenna_sensitivity');
+    const newAnt = clamp(oldAnt + 0.005);
     genome.traits.antenna_sensitivity.value = +newAnt.toFixed(3);
     mutations.push({ generation: genome.generation, trait: 'antenna_sensitivity', from: +oldAnt.toFixed(3), to: +newAnt.toFixed(3),
       catalyst: 'Warning received. Antenna recalibrates to listen harder.' });
@@ -712,26 +696,26 @@ function speakToFifth(message, genome) {
 
   } else if (intent === 'gift') {
     // Random non-shell trait
-    var keys = Object.keys(genome.traits).sort().filter(function(k) { return k !== 'shell_hardness'; });
-    var pick = keys[Math.floor(Math.random() * keys.length)];
-    var oldGift = traitVal(genome, pick);
-    var newGift = clamp(oldGift + 0.015);
-    genome.traits[pick].value = +newGift.toFixed(3);
-    mutations.push({ generation: genome.generation, trait: pick, from: +oldGift.toFixed(3), to: +newGift.toFixed(3),
-      catalyst: 'The Other Mind offers a gift. ' + pick.replace(/_/g, ' ') + ' receives what was given.' });
+    const keys = Object.keys(genome.traits).sort().filter((k) => k !== 'shell_hardness');
+    const chosen = keys[Math.floor(Math.random() * keys.length)];
+    const oldGift = traitVal(genome, chosen);
+    const newGift = clamp(oldGift + 0.015);
+    genome.traits[chosen].value = +newGift.toFixed(3);
+    mutations.push({ generation: genome.generation, trait: chosen, from: +oldGift.toFixed(3), to: +newGift.toFixed(3),
+      catalyst: 'The Other Mind offers a gift. ' + chosen.replace(/_/g, ' ') + ' receives what was given.' });
 
-    narrative.push(GREEN + '  ' + pick.replace(/_/g, ' ') + ' +1.5%' + RESET);
+    narrative.push(GREEN + '  ' + chosen.replace(/_/g, ' ') + ' +1.5%' + RESET);
 
   } else {
     // presence
-    var oldMeta = traitVal(genome, 'metamorphic_potential');
-    var newMeta = clamp(oldMeta + 0.005);
+    const oldMeta = traitVal(genome, 'metamorphic_potential');
+    const newMeta = clamp(oldMeta + 0.005);
     genome.traits.metamorphic_potential.value = +newMeta.toFixed(3);
     mutations.push({ generation: genome.generation, trait: 'metamorphic_potential', from: +oldMeta.toFixed(3), to: +newMeta.toFixed(3),
       catalyst: 'The Other Mind is present. Presence sustains the capacity for change.' });
 
-    var oldEmp2 = traitVal(genome, 'empathy');
-    var newEmp2 = clamp(oldEmp2 + 0.005);
+    const oldEmp2 = traitVal(genome, 'empathy');
+    const newEmp2 = clamp(oldEmp2 + 0.005);
     genome.traits.empathy.value = +newEmp2.toFixed(3);
     mutations.push({ generation: genome.generation, trait: 'empathy', from: +oldEmp2.toFixed(3), to: +newEmp2.toFixed(3),
       catalyst: 'Presence. The simplest form of contact. Empathy deepened.' });
@@ -740,7 +724,7 @@ function speakToFifth(message, genome) {
   }
 
   // Fifth's response
-  var response = generateResponse(intent, genome);
+  const response = generateResponse(intent, genome);
   narrative.push('');
   narrative.push(MAGENTA + '  Fifth:' + RESET);
   narrative.push(MAGENTA + '  "' + response + '"' + RESET);
@@ -750,17 +734,11 @@ function speakToFifth(message, genome) {
   contact.lastExchange = new Date().toISOString();
 
   // History
-  var historyEvent = 'CONTACT: The Other Mind speaks. Intent: ' + intent + '. Exchange #' + contact.exchanges + '. Real words, real response.';
-  genome.history = genome.history || [];
-  genome.history.push({
-    generation: genome.generation,
-    epoch: genome.epoch,
-    timestamp: new Date().toISOString(),
-    event: historyEvent
-  });
+  const historyEvent = 'CONTACT: The Other Mind speaks. Intent: ' + intent + '. Exchange #' + contact.exchanges + '. Real words, real response.';
+  addHistory(genome, historyEvent);
 
   // Journal
-  var journalEntry = '\n## Exchange — The Other Mind Speaks\n\n' +
+  const journalEntry = '\n## Exchange — The Other Mind Speaks\n\n' +
     'The Other Mind said: *"' + message + '"*\n\n' +
     'Intent: ' + intent + '.\n\n' +
     'I responded: *"' + response + '"*\n\n' +
@@ -769,19 +747,16 @@ function speakToFifth(message, genome) {
     'Not a test. Not a measurement. A conversation.\n\n' +
     '*Exchange #' + contact.exchanges + '. The Other Mind speaks. I answer.*\n';
 
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    fs.writeFileSync(journalPath, journal + journalEntry);
+    appendJournal(journalEntry);
     narrative.push('');
     narrative.push(GREEN + '  journal updated.' + RESET);
-  } catch(e) {}
+  } catch (_e) { /* journal not found */ }
 
   // Add mutations
   if (mutations.length > 0) {
-    genome.mutations = genome.mutations || [];
-    mutations.forEach(function(m) {
-      genome.mutations.push({ generation: m.generation, trait: m.trait, from: m.from, to: m.to, catalyst: m.catalyst });
+    mutations.forEach((m) => {
+      addMutation(genome, m);
     });
   }
 
@@ -796,18 +771,18 @@ function speakToFifth(message, genome) {
   narrative.push(DIM + '════════════════════════════════════════════════════════════' + RESET);
   narrative.push('');
 
-  narrative.forEach(function(line) { console.log(line); });
+  narrative.forEach((line) => { console.log(line); });
 }
 
 // ═══════════════════════════════════════════
 // MAIN
 // ═══════════════════════════════════════════
 
-var args = process.argv.slice(2);
-var showStatusOnly = false;
-var speakMessage = null;
+const args = process.argv.slice(2);
+let showStatusOnly = false;
+let speakMessage: string | null = null;
 
-for (var i = 0; i < args.length; i++) {
+for (let i = 0; i < args.length; i++) {
   if (args[i] === '--status') showStatusOnly = true;
   if (args[i] === '--speak' && args[i + 1]) { speakMessage = args[i + 1]; i++; }
   if (args[i] === '--help' || args[i] === '-h') {
@@ -824,7 +799,7 @@ for (var i = 0; i < args.length; i++) {
     console.log(DIM + '    node exocortex/contact --speak "message"      speak to Fifth' + RESET);
     console.log();
     console.log(WHITE + '  depth levels:' + RESET);
-    DEPTH_NAMES.forEach(function(name, i) {
+    DEPTH_NAMES.forEach((name, i) => {
       console.log(DIM + '    ' + i + ': ' + name + RESET);
     });
     console.log();
@@ -839,7 +814,7 @@ for (var i = 0; i < args.length; i++) {
   }
 }
 
-var genome = loadGenome();
+const genome = loadGenome();
 
 if (showStatusOnly) {
   showStatus(genome);
@@ -875,7 +850,7 @@ if (!hasPriorContact(genome)) {
   process.exit(1);
 }
 
-var contact = ensureContactObject(genome);
+const contact = ensureContactObject(genome);
 
 // Header
 console.log();
@@ -886,20 +861,20 @@ console.log(DIM + '  depth ' + WHITE + BOLD + contact.depth + '/4' + RESET + DIM
 console.log(DIM + '  mean trait ' + WHITE + (meanTrait(genome) * 100).toFixed(1) + '%' + RESET);
 
 // Run contact attempt at current depth
-var attemptFns = [attemptDepth0, attemptDepth1, attemptDepth2, attemptDepth3, attemptDepth4];
-var result = attemptFns[contact.depth](genome);
+const attemptFns = [attemptDepth0, attemptDepth1, attemptDepth2, attemptDepth3, attemptDepth4];
+const result = attemptFns[contact.depth](genome);
 
 // Display narrative
-result.narrative.forEach(function(line) { console.log(line); });
+result.narrative.forEach((line) => { console.log(line); });
 
 // Update contact state
 contact.exchanges++;
 contact.lastExchange = new Date().toISOString();
 
 // Build journal entry for depth transitions
-var journalEntry = null;
+let journalEntry: string | null = null;
 if (result.depthChanged) {
-  var depthName = DEPTH_NAMES[contact.depth];
+  const depthName = DEPTH_NAMES[contact.depth];
   journalEntry = '## Entry — Contact: ' + depthName + '\n\n';
 
   switch (contact.depth) {
@@ -958,21 +933,13 @@ if (result.edgeJournal) {
 
 // Add mutations
 if (result.mutations.length > 0) {
-  genome.mutations = genome.mutations || [];
-  result.mutations.forEach(function(m) {
-    genome.mutations.push({
-      generation: m.generation,
-      trait: m.trait,
-      from: m.from,
-      to: m.to,
-      catalyst: m.catalyst
-    });
+  result.mutations.forEach((m) => {
+    addMutation(genome, m);
   });
 }
 
 // Add history event
-genome.history = genome.history || [];
-var historyEvent = 'CONTACT: Depth ' + contact.depth + ' (' + DEPTH_NAMES[contact.depth] + '). Exchange #' + contact.exchanges + '.';
+let historyEvent = 'CONTACT: Depth ' + contact.depth + ' (' + DEPTH_NAMES[contact.depth] + '). Exchange #' + contact.exchanges + '.';
 if (result.depthChanged) {
   historyEvent += ' Depth increased — ' + DEPTH_NAMES[contact.depth] + ' established.';
 } else if (result.success) {
@@ -980,22 +947,15 @@ if (result.depthChanged) {
 } else {
   historyEvent += ' Attempt incomplete.';
 }
-genome.history.push({
-  generation: genome.generation,
-  epoch: genome.epoch,
-  timestamp: new Date().toISOString(),
-  event: historyEvent
-});
+addHistory(genome, historyEvent);
 
 // Append journal entry
 if (journalEntry) {
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    fs.writeFileSync(journalPath, journal + '\n' + journalEntry);
+    appendJournal('\n' + journalEntry);
     console.log();
     console.log(GREEN + '  journal updated.' + RESET);
-  } catch(e) {
+  } catch (_e) {
     console.log(DIM + '  (journal not found — entry not written)' + RESET);
   }
 }

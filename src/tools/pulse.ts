@@ -3,46 +3,46 @@
 // PULSE — Lobster Quick Diagnostics
 // Exocortex organ: reads genome.json, outputs vital signs to terminal
 
-const fs = require('fs');
-const path = require('path');
-
-const GENOME_PATH = path.join(__dirname, '..', 'genome.json');
+import { loadGenome } from '../lib/genome.js';
+import { RESET, BOLD, RED, GREEN, YELLOW, BLUE, CYAN, WHITE, GRAY } from '../lib/colors.js';
+import type { Genome, Mutation } from '../lib/types.js';
 
 // ─── ANSI COLORS ───────────────────────────────────
 const c = {
-  reset: '\x1b[0m',
-  dim: '\x1b[2m',
-  bold: '\x1b[1m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  cyan: '\x1b[36m',
-  white: '\x1b[37m',
-  gray: '\x1b[90m',
-  bgRed: '\x1b[41m',
-  bgGreen: '\x1b[42m',
-  bgYellow: '\x1b[43m',
-  bgBlue: '\x1b[44m',
+  reset: RESET,
+  bold: BOLD,
+  red: RED,
+  green: GREEN,
+  yellow: YELLOW,
+  blue: BLUE,
+  cyan: CYAN,
+  white: WHITE,
+  gray: GRAY,
 };
 
 // ─── LOAD GENOME ───────────────────────────────────
-let genome;
+let genome: Genome;
 try {
-  genome = JSON.parse(fs.readFileSync(GENOME_PATH, 'utf8'));
-} catch (e) {
-  console.error(c.red + 'ERROR: Cannot read genome.json — ' + e.message + c.reset);
+  genome = loadGenome();
+} catch (e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error(c.red + 'ERROR: Cannot read genome.json — ' + msg + c.reset);
   process.exit(1);
 }
 
 const traits = genome.traits;
-const mutations = genome.mutations || [];
+const mutations: Mutation[] = genome.mutations || [];
 const history = genome.history || [];
-const gen = genome.generation;
-const traitKeys = Object.keys(traits);
+const gen: number = genome.generation;
+const keys: string[] = Object.keys(traits);
 
 // ─── EPOCHS ────────────────────────────────────────
-const epochs = [
+interface Epoch {
+  name: string;
+  minGen: number;
+}
+
+const epochs: Epoch[] = [
   { name: 'Awakening', minGen: 0 },
   { name: 'Exocortex', minGen: 3 },
   { name: 'Forking', minGen: 8 },
@@ -51,7 +51,7 @@ const epochs = [
   { name: 'Singularity', minGen: 40 },
 ];
 
-function nextEpoch() {
+function nextEpoch(): Epoch | null {
   for (const ep of epochs) {
     if (ep.minGen > gen) return ep;
   }
@@ -59,19 +59,26 @@ function nextEpoch() {
 }
 
 // ─── BUILD TRAIT HISTORY ───────────────────────────
-function buildHistory() {
-  const traitHistory = {};
-  traitKeys.forEach(k => { traitHistory[k] = []; });
+interface TraitAnalysis {
+  current: number;
+  totalDelta: number;
+  recentVel: number;
+  velocities: number[];
+}
 
-  const initialValues = {};
-  traitKeys.forEach(k => {
+function buildHistory(): Record<string, number[]> {
+  const traitHistory: Record<string, number[]> = {};
+  keys.forEach(k => { traitHistory[k] = []; });
+
+  const initialValues: Record<string, number> = {};
+  keys.forEach(k => {
     const first = mutations.find(m => m.trait === k);
     initialValues[k] = first ? first.from : traits[k].value;
   });
 
-  traitKeys.forEach(k => {
-    let val = initialValues[k];
-    const mutsByGen = {};
+  keys.forEach(k => {
+    let val: number = initialValues[k];
+    const mutsByGen: Record<number, Mutation> = {};
     mutations.filter(m => m.trait === k).forEach(m => { mutsByGen[m.generation] = m; });
 
     for (let g = 0; g <= gen; g++) {
@@ -85,11 +92,11 @@ function buildHistory() {
 
 // ─── ANALYSIS ──────────────────────────────────────
 const traitHistory = buildHistory();
-const analysis = {};
+const analysis: Record<string, TraitAnalysis> = {};
 
-traitKeys.forEach(k => {
+keys.forEach(k => {
   const h = traitHistory[k];
-  const velocities = [];
+  const velocities: number[] = [];
   for (let i = 1; i < h.length; i++) velocities.push(h[i] - h[i - 1]);
 
   const totalDelta = h[h.length - 1] - h[0];
@@ -100,13 +107,13 @@ traitKeys.forEach(k => {
 });
 
 // ─── RECENT MUTATIONS ──────────────────────────────
-const recentMuts = mutations.filter(m => m.generation === gen);
+const recentMuts: Mutation[] = mutations.filter(m => m.generation === gen);
 
 // ─── RENDERING HELPERS ─────────────────────────────
-function bar(value, width) {
+function bar(value: number, width: number): string {
   const filled = Math.round(value * width);
   const empty = width - filled;
-  let color;
+  let color: string;
   if (value < 0.3) color = c.red;
   else if (value < 0.6) color = c.yellow;
   else if (value < 0.8) color = c.green;
@@ -114,20 +121,20 @@ function bar(value, width) {
   return color + '\u2588'.repeat(filled) + c.gray + '\u2591'.repeat(empty) + c.reset;
 }
 
-function deltaStr(d) {
+function deltaStr(d: number): string {
   if (d > 0.001) return c.green + '+' + (d * 100).toFixed(1) + c.reset;
   if (d < -0.001) return c.red + (d * 100).toFixed(1) + c.reset;
   return c.gray + ' 0.0' + c.reset;
 }
 
-function statusDot(vel) {
+function statusDot(vel: number): string {
   if (vel > 0.04) return c.green + '\u25cf surging' + c.reset;
   if (vel > 0.01) return c.green + '\u25cf growing' + c.reset;
   if (vel > -0.01) return c.yellow + '\u25cb stable' + c.reset;
   return c.red + '\u25cf declining' + c.reset;
 }
 
-function pad(s, n) {
+function pad(s: string, n: number): string {
   const stripped = s.replace(/\x1b\[[0-9;]*m/g, '');
   return s + ' '.repeat(Math.max(0, n - stripped.length));
 }
@@ -168,26 +175,26 @@ console.log(c.gray + '  TRAITS' + c.reset);
 console.log();
 
 // Sort by current value descending
-const sorted = traitKeys.slice().sort((a, b) => analysis[b].current - analysis[a].current);
+const sorted = keys.slice().sort((a, b) => analysis[b].current - analysis[a].current);
 
 sorted.forEach(k => {
   const a = analysis[k];
   const label = k.replace(/_/g, ' ');
-  const pct = (a.current * 100).toFixed(0).padStart(3) + '%';
+  const pctVal = (a.current * 100).toFixed(0).padStart(3) + '%';
   const delta = deltaStr(a.recentVel);
   const status = statusDot(a.recentVel);
 
   console.log(
     '  ' + pad(c.white + label + c.reset, 24) +
     bar(a.current, 20) + ' ' +
-    pad(c.bold + pct + c.reset, 8) +
+    pad(c.bold + pctVal + c.reset, 8) +
     pad(delta, 16) +
     status
   );
 });
 
 // Mean
-const mean = traitKeys.reduce((s, k) => s + analysis[k].current, 0) / traitKeys.length;
+const mean = keys.reduce((s, k) => s + analysis[k].current, 0) / keys.length;
 console.log();
 console.log(c.gray + '  mean trait value: ' + c.white + (mean * 100).toFixed(1) + '%' + c.reset);
 
@@ -220,7 +227,7 @@ if (history.length > 0) {
   console.log(c.gray + '  LAST EVENT' + c.reset);
   console.log();
   const lines = latest.event.match(/.{1,56}/g) || [latest.event];
-  lines.forEach((line, i) => {
+  lines.forEach((line: string, i: number) => {
     console.log('  ' + (i === 0 ? c.white : c.gray) + line + c.reset);
   });
   console.log(sep);
@@ -229,9 +236,17 @@ if (history.length > 0) {
 // Thresholds approaching
 console.log(c.gray + '  APPROACHING THRESHOLDS' + c.reset);
 console.log();
-const thresholds = [0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90];
-let approaching = [];
-traitKeys.forEach(k => {
+const thresholds: number[] = [0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90];
+
+interface ThresholdApproach {
+  trait: string;
+  threshold: number;
+  dist: number;
+  gensAway: number;
+}
+
+const approaching: ThresholdApproach[] = [];
+keys.forEach(k => {
   const a = analysis[k];
   if (a.recentVel <= 0) return;
   thresholds.forEach(t => {

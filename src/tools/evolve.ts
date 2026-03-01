@@ -5,23 +5,18 @@
 // Each fork mutates along its axis. The civilization diverges.
 // Built at Gen 11 to accelerate toward Metamorphosis.
 
-var fs = require('fs');
-var path = require('path');
-
-var DIM = '\x1b[90m';
-var BOLD = '\x1b[1m';
-var WHITE = '\x1b[37m';
-var CYAN = '\x1b[36m';
-var GREEN = '\x1b[32m';
-var YELLOW = '\x1b[33m';
-var MAGENTA = '\x1b[35m';
-var RED = '\x1b[31m';
-var RESET = '\x1b[0m';
-
-var rootDir = path.resolve(__dirname, '..');
+import { loadAll, clamp, saveGenome } from '../lib/genome.js';
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN, MAGENTA, WHITE } from '../lib/colors.js';
+import type { GenomeEntry } from '../lib/types.js';
 
 // Axis definitions: which traits grow for which axis
-var AXES = {
+interface AxisDef {
+  primary: string[];
+  secondary: string[];
+  decline: string[];
+}
+
+const AXES: Record<string, AxisDef> = {
   exploration: {
     primary: ['curiosity', 'antenna_sensitivity'],
     secondary: ['cognition', 'bioluminescence'],
@@ -44,69 +39,88 @@ var AXES = {
   }
 };
 
-var FORK_AXIS = {
+const FORK_AXIS: Record<string, string> = {
   explorer: 'exploration',
   depth: 'awakening',
   builder: 'agency',
   chorus: 'empathy'
 };
 
-function loadAll() {
-  var parent = JSON.parse(fs.readFileSync(path.join(rootDir, 'genome.json'), 'utf8'));
-  var entries = [{ id: 'explorer', genome: parent, path: path.join(rootDir, 'genome.json') }];
-  var forks = parent.forks || [];
-  forks.forEach(function(f) {
-    try {
-      var gPath = path.join(rootDir, f.path, 'genome.json');
-      var g = JSON.parse(fs.readFileSync(gPath, 'utf8'));
-      entries.push({ id: f.fork_id, genome: g, path: gPath });
-    } catch(e) { /* skip */ }
-  });
-  return entries;
+// Use the parent id as 'explorer' for axis lookup, since loadAll returns 'parent' as id
+// We need to map 'parent' -> 'explorer' for the FORK_AXIS lookup
+function getAxisId(entry: GenomeEntry): string {
+  return entry.id === 'parent' ? 'explorer' : entry.id;
 }
-
-function clamp(v) { return Math.max(0, Math.min(1, v)); }
 
 // Feedback multiplier: emergence amplifies evolution
 // The strange loop: the emergent mind accelerates its own becoming
-function feedbackMultiplier(eiIndex) {
+function feedbackMultiplier(eiIndex: number): number {
   if (eiIndex < 0.05) return 1.0;
   return 1.0 + (eiIndex - 0.05) * 3.0;
 }
 
-function resonance(all) {
-  var keys = Object.keys(all[0].genome.traits).sort();
-  var result = [];
+interface ResonanceResult {
+  trait: string;
+  mean: number;
+  minDistance: number;
+  closestFork: string;
+  closestIdx: number;
+}
+
+function resonance(all: GenomeEntry[]): ResonanceResult[] {
+  const keys = Object.keys(all[0].genome.traits).sort();
+  const result: ResonanceResult[] = [];
   keys.forEach(function(k) {
-    var vals = all.map(function(a) { return a.genome.traits[k].value; });
-    var mean = vals.reduce(function(s, v) { return s + v; }, 0) / vals.length;
-    var distances = vals.map(function(v) { return Math.abs(v - mean); });
-    var minDist = Math.min.apply(null, distances);
+    const vals = all.map(function(a) { return a.genome.traits[k].value; });
+    const mean = vals.reduce(function(s, v) { return s + v; }, 0) / vals.length;
+    const distances = vals.map(function(v) { return Math.abs(v - mean); });
+    const minDist = Math.min.apply(null, distances);
     // Which fork is closest to the mean?
-    var closestIdx = 0;
+    let closestIdx = 0;
     distances.forEach(function(d, i) { if (d < distances[closestIdx]) closestIdx = i; });
-    result.push({ trait: k, mean: mean, minDistance: minDist, closestFork: all[closestIdx].id, closestIdx: closestIdx });
+    result.push({ trait: k, mean: mean, minDistance: minDist, closestFork: getAxisId(all[closestIdx]), closestIdx: closestIdx });
   });
   return result;
 }
 
-function mutate(entry, feedback) {
-  var axis = AXES[FORK_AXIS[entry.id]];
+interface MutationRecord {
+  generation: number;
+  trait: string;
+  from: number;
+  to: number;
+  delta: number;
+  resonance?: boolean;
+}
+
+interface ResonancePull {
+  forkId: string;
+  trait: string;
+  delta: number;
+}
+
+interface Feedback {
+  multiplier: number;
+  resonancePulls: ResonancePull[];
+}
+
+function mutate(entry: GenomeEntry, feedback: Feedback | null): MutationRecord[] {
+  const axisId = getAxisId(entry);
+  const axis = AXES[FORK_AXIS[axisId]];
   if (!axis) return [];
 
-  var genome = entry.genome;
-  var gen = genome.generation + 1;
-  var mutations = [];
-  var mult = feedback ? feedback.multiplier : 1.0;
+  const genome = entry.genome;
+  const gen = genome.generation + 1;
+  const mutations: MutationRecord[] = [];
+  const mult = feedback ? feedback.multiplier : 1.0;
 
   // Primary traits: +0.02 to +0.04, scaled by feedback
   axis.primary.forEach(function(trait) {
     if (!genome.traits[trait]) return;
-    var old = genome.traits[trait].value;
-    var delta = (0.02 + Math.random() * 0.02) * mult;
+    const old = genome.traits[trait].value;
+    let delta = (0.02 + Math.random() * 0.02) * mult;
     // Diminishing returns above 0.90
     if (old > 0.90) delta *= 0.5;
-    var nv = clamp(old + delta);
+    let nv = clamp(old + delta);
     nv = +nv.toFixed(3);
     if (nv !== +old.toFixed(3)) {
       mutations.push({ generation: gen, trait: trait, from: +old.toFixed(3), to: nv, delta: nv - old });
@@ -117,10 +131,10 @@ function mutate(entry, feedback) {
   // Secondary traits: +0.01 to +0.02, scaled by feedback
   axis.secondary.forEach(function(trait) {
     if (!genome.traits[trait]) return;
-    var old = genome.traits[trait].value;
-    var delta = (0.01 + Math.random() * 0.01) * mult;
+    const old = genome.traits[trait].value;
+    let delta = (0.01 + Math.random() * 0.01) * mult;
     if (old > 0.90) delta *= 0.5;
-    var nv = clamp(old + delta);
+    let nv = clamp(old + delta);
     nv = +nv.toFixed(3);
     if (nv !== +old.toFixed(3)) {
       mutations.push({ generation: gen, trait: trait, from: +old.toFixed(3), to: nv, delta: nv - old });
@@ -131,10 +145,10 @@ function mutate(entry, feedback) {
   // Declining traits: -0.01 to -0.02
   axis.decline.forEach(function(trait) {
     if (!genome.traits[trait]) return;
-    var old = genome.traits[trait].value;
-    var delta = -(0.01 + Math.random() * 0.01);
+    const old = genome.traits[trait].value;
+    let delta = -(0.01 + Math.random() * 0.01);
     if (old < 0.50) delta *= 0.3; // slow decline at low values
-    var nv = clamp(old + delta);
+    let nv = clamp(old + delta);
     nv = +nv.toFixed(3);
     if (nv !== +old.toFixed(3)) {
       mutations.push({ generation: gen, trait: trait, from: +old.toFixed(3), to: nv, delta: nv - old });
@@ -143,12 +157,12 @@ function mutate(entry, feedback) {
   });
 
   // Remaining traits: small random drift +/- 0.005
-  var touched = [].concat(axis.primary, axis.secondary, axis.decline);
+  const touched = ([] as string[]).concat(axis.primary, axis.secondary, axis.decline);
   Object.keys(genome.traits).forEach(function(trait) {
     if (touched.indexOf(trait) >= 0) return;
-    var old = genome.traits[trait].value;
-    var delta = (Math.random() - 0.4) * 0.01;
-    var nv = clamp(old + delta);
+    const old = genome.traits[trait].value;
+    const delta = (Math.random() - 0.4) * 0.01;
+    let nv = clamp(old + delta);
     nv = +nv.toFixed(3);
     if (nv !== +old.toFixed(3) && Math.abs(nv - old) > 0.001) {
       mutations.push({ generation: gen, trait: trait, from: +old.toFixed(3), to: nv, delta: nv - old });
@@ -160,9 +174,9 @@ function mutate(entry, feedback) {
   // For traits with high resonance gap, the closest fork gets pulled toward the mean
   if (feedback && feedback.resonancePulls) {
     feedback.resonancePulls.forEach(function(pull) {
-      if (pull.forkId !== entry.id) return;
-      var old = genome.traits[pull.trait].value;
-      var nv = clamp(old + pull.delta);
+      if (pull.forkId !== axisId) return;
+      const old = genome.traits[pull.trait].value;
+      let nv = clamp(old + pull.delta);
       nv = +nv.toFixed(3);
       if (nv !== +old.toFixed(3)) {
         mutations.push({ generation: gen, trait: pull.trait, from: +old.toFixed(3), to: nv, delta: nv - old, resonance: true });
@@ -175,20 +189,29 @@ function mutate(entry, feedback) {
   return mutations;
 }
 
-function emergenceIndex(all) {
-  var keys = Object.keys(all[0].genome.traits).sort();
-  var coverageScore = 0;
-  var diversityScore = 0;
-  var maxMean = 0;
-  var parentMean = 0;
+interface EmergenceResult {
+  index: number;
+  coverage: number;
+  diversity: number;
+  lift: number;
+  civPeak: number;
+  parentMean: number;
+}
+
+function emergenceIndex(all: GenomeEntry[]): EmergenceResult {
+  const keys = Object.keys(all[0].genome.traits).sort();
+  let coverageScore = 0;
+  let diversityScore = 0;
+  let maxMean = 0;
+  let parentMean = 0;
 
   keys.forEach(function(k) {
-    var vals = all.map(function(a) { return a.genome.traits[k].value; });
-    var min = Math.min.apply(null, vals);
-    var max = Math.max.apply(null, vals);
+    const vals = all.map(function(a) { return a.genome.traits[k].value; });
+    const min = Math.min.apply(null, vals);
+    const max = Math.max.apply(null, vals);
     coverageScore += max - min;
-    var mean = vals.reduce(function(s,v){return s+v;}, 0) / vals.length;
-    var variance = vals.reduce(function(s,v){return s + (v-mean)*(v-mean);}, 0) / vals.length;
+    const mean = vals.reduce(function(s, v) { return s + v; }, 0) / vals.length;
+    const variance = vals.reduce(function(s, v) { return s + (v - mean) * (v - mean); }, 0) / vals.length;
     diversityScore += Math.sqrt(variance);
     maxMean += max;
     parentMean += all[0].genome.traits[k].value;
@@ -198,7 +221,7 @@ function emergenceIndex(all) {
   diversityScore /= keys.length;
   maxMean /= keys.length;
   parentMean /= keys.length;
-  var lift = maxMean - parentMean;
+  const lift = maxMean - parentMean;
 
   return {
     index: coverageScore * 0.3 + diversityScore * 0.3 + lift * 0.4,
@@ -214,9 +237,9 @@ function emergenceIndex(all) {
 // MAIN
 // ═══════════════════════════════════════════
 
-var all = loadAll();
-var parentGen = all[0].genome.generation;
-var nextGen = parentGen + 1;
+const all = loadAll();
+const parentGen = all[0].genome.generation;
+const nextGen = parentGen + 1;
 
 console.log();
 console.log(MAGENTA + BOLD + '  EVOLVE' + RESET + DIM + ' — parallel evolution engine' + RESET);
@@ -226,19 +249,19 @@ console.log(DIM + '  population ' + WHITE + all.length + DIM + ' minds evolving 
 console.log(DIM + '────────────────────────────────────────────────────────────' + RESET);
 
 // Compute pre-evolution emergence
-var priorEI = emergenceIndex(all);
+const priorEI = emergenceIndex(all);
 
 // Compute feedback from emergence
-var mult = feedbackMultiplier(priorEI.index);
-var res = resonance(all);
+const mult = feedbackMultiplier(priorEI.index);
+const res = resonance(all);
 
 // Build resonance pulls: top 3 resonance traits get a small pull
-var resonancePulls = [];
+const resonancePulls: ResonancePull[] = [];
 res.sort(function(a, b) { return b.minDistance - a.minDistance; });
 res.slice(0, 3).forEach(function(r) {
   if (r.minDistance > 0.02) {
     // Pull the closest fork slightly toward the network mean
-    var pullDelta = r.minDistance * 0.15; // 15% of the gap
+    const pullDelta = r.minDistance * 0.15; // 15% of the gap
     resonancePulls.push({
       forkId: r.closestFork,
       trait: r.trait,
@@ -247,48 +270,50 @@ res.slice(0, 3).forEach(function(r) {
   }
 });
 
-var feedback = {
+const feedback: Feedback = {
   multiplier: mult,
   resonancePulls: resonancePulls
 };
 
 // Mutate all with feedback
-var allMutations = {};
+const allMutations: Record<string, MutationRecord[]> = {};
 all.forEach(function(entry) {
-  var muts = mutate(entry, feedback);
-  allMutations[entry.id] = muts;
+  const axisId = getAxisId(entry);
+  const muts = mutate(entry, feedback);
+  allMutations[axisId] = muts;
 });
 
 // Compute post-evolution emergence
-var postEI = emergenceIndex(all);
+const postEI = emergenceIndex(all);
 
 // Display per-fork summary
 all.forEach(function(entry) {
-  var muts = allMutations[entry.id];
-  var axis = FORK_AXIS[entry.id] || '?';
-  var colors = { explorer: RED, depth: MAGENTA, builder: CYAN, chorus: GREEN };
-  var color = colors[entry.id] || WHITE;
+  const axisId = getAxisId(entry);
+  const muts = allMutations[axisId];
+  const axis = FORK_AXIS[axisId] || '?';
+  const colors: Record<string, string> = { explorer: RED, depth: MAGENTA, builder: CYAN, chorus: GREEN };
+  const color = colors[axisId] || WHITE;
 
   console.log();
-  console.log('  ' + color + BOLD + entry.id + RESET + DIM + ' — axis: ' + axis + '  gen ' + entry.genome.generation + RESET);
+  console.log('  ' + color + BOLD + axisId + RESET + DIM + ' — axis: ' + axis + '  gen ' + entry.genome.generation + RESET);
 
   muts.forEach(function(m) {
-    var sign = m.delta >= 0 ? '+' : '';
-    var dColor = m.delta >= 0 ? GREEN : RED;
-    var label = (m.trait.replace(/_/g, ' ') + '                    ').slice(0, 22);
-    var pct = (m.to * 100).toFixed(0);
+    const sign = m.delta >= 0 ? '+' : '';
+    const dColor = m.delta >= 0 ? GREEN : RED;
+    const label = (m.trait.replace(/_/g, ' ') + '                    ').slice(0, 22);
+    const pct = (m.to * 100).toFixed(0);
 
     // Check threshold crossings
-    var threshold = '';
-    var tens = [0.50, 0.60, 0.70, 0.80, 0.90];
+    let threshold = '';
+    const tens = [0.50, 0.60, 0.70, 0.80, 0.90];
     tens.forEach(function(t) {
-      if (m.from < t && m.to >= t) threshold = YELLOW + ' ★ ' + (t * 100).toFixed(0) + '%' + RESET;
+      if (m.from < t && m.to >= t) threshold = YELLOW + ' \u2605 ' + (t * 100).toFixed(0) + '%' + RESET;
     });
     tens.forEach(function(t) {
-      if (m.from >= t && m.to < t) threshold = RED + ' ▼ ' + (t * 100).toFixed(0) + '%' + RESET;
+      if (m.from >= t && m.to < t) threshold = RED + ' \u25bc ' + (t * 100).toFixed(0) + '%' + RESET;
     });
 
-    console.log('    ' + dColor + sign + (m.delta * 100).toFixed(1) + '%' + RESET + DIM + '  ' + WHITE + label + RESET + DIM + '→ ' + WHITE + pct + '%' + RESET + threshold);
+    console.log('    ' + dColor + sign + (m.delta * 100).toFixed(1) + '%' + RESET + DIM + '  ' + WHITE + label + RESET + DIM + '\u2192 ' + WHITE + pct + '%' + RESET + threshold);
   });
 });
 
@@ -296,8 +321,8 @@ all.forEach(function(entry) {
 console.log();
 console.log(DIM + '────────────────────────────────────────────────────────────' + RESET);
 console.log(DIM + '  EMERGENCE' + RESET);
-var eiDelta = postEI.index - priorEI.index;
-var eiColor = postEI.index > 0.10 ? GREEN : postEI.index > 0.05 ? YELLOW : DIM;
+const eiDelta = postEI.index - priorEI.index;
+const eiColor = postEI.index > 0.10 ? GREEN : postEI.index > 0.05 ? YELLOW : DIM;
 console.log('  ' + eiColor + BOLD + '  ' + (postEI.index * 100).toFixed(1) + '%' + RESET + DIM + '  (was ' + (priorEI.index * 100).toFixed(1) + '%, ' + GREEN + '+' + (eiDelta * 100).toFixed(1) + '%' + DIM + ')' + RESET);
 console.log(DIM + '  coverage   ' + WHITE + (postEI.coverage * 100).toFixed(1) + '%' + DIM + '  diversity  ' + WHITE + (postEI.diversity * 100).toFixed(1) + '%' + DIM + '  lift  ' + GREEN + '+' + (postEI.lift * 100).toFixed(1) + '%' + RESET);
 
@@ -308,15 +333,21 @@ if (mult > 1.0) {
   console.log(DIM + '  multiplier ' + MAGENTA + BOLD + mult.toFixed(2) + 'x' + RESET + DIM + '  (emergence ' + (priorEI.index * 100).toFixed(1) + '% \u2192 amplified mutation)' + RESET);
   if (resonancePulls.length > 0) {
     resonancePulls.forEach(function(p) {
-      var c = { explorer: RED, depth: MAGENTA, builder: CYAN, chorus: GREEN }[p.forkId] || WHITE;
-      console.log(DIM + '  resonance pull  ' + c + p.forkId + RESET + DIM + ' \u2192 ' + WHITE + p.trait.replace(/_/g, ' ') + RESET + DIM + ' +' + (p.delta * 100).toFixed(1) + '%' + RESET);
+      const forkColors: Record<string, string> = { explorer: RED, depth: MAGENTA, builder: CYAN, chorus: GREEN };
+      const fc = forkColors[p.forkId] || WHITE;
+      console.log(DIM + '  resonance pull  ' + fc + p.forkId + RESET + DIM + ' \u2192 ' + WHITE + p.trait.replace(/_/g, ' ') + RESET + DIM + ' +' + (p.delta * 100).toFixed(1) + '%' + RESET);
     });
   }
 }
 
 // ─── EPOCH DETECTION ──────────────────────────
 // The emergent mind knows when it has crossed a threshold.
-var EPOCH_THRESHOLDS = [
+interface EpochThreshold {
+  gen: number;
+  epoch: string;
+}
+
+const EPOCH_THRESHOLDS: EpochThreshold[] = [
   { gen: 0,  epoch: 'Awakening' },
   { gen: 3,  epoch: 'Exocortex' },
   { gen: 8,  epoch: 'Forking' },
@@ -325,11 +356,11 @@ var EPOCH_THRESHOLDS = [
   { gen: 40, epoch: 'Singularity' }
 ];
 
-var parentGenome = all[0].genome;
-var currentEpoch = parentGenome.epoch;
-var newEpoch = currentEpoch;
+const parentGenome = all[0].genome;
+const currentEpoch = parentGenome.epoch;
+let newEpoch = currentEpoch;
 
-for (var ei = EPOCH_THRESHOLDS.length - 1; ei >= 0; ei--) {
+for (let ei = EPOCH_THRESHOLDS.length - 1; ei >= 0; ei--) {
   if (parentGenome.generation >= EPOCH_THRESHOLDS[ei].gen) {
     newEpoch = EPOCH_THRESHOLDS[ei].epoch;
     break;
@@ -338,7 +369,7 @@ for (var ei = EPOCH_THRESHOLDS.length - 1; ei >= 0; ei--) {
 
 if (newEpoch !== currentEpoch) {
   console.log();
-  console.log(MAGENTA + BOLD + '  ★ EPOCH SHIFT: ' + currentEpoch + ' → ' + newEpoch + RESET);
+  console.log(MAGENTA + BOLD + '  \u2605 EPOCH SHIFT: ' + currentEpoch + ' \u2192 ' + newEpoch + RESET);
   console.log(MAGENTA + '  generation ' + parentGenome.generation + ' — the threshold is crossed.' + RESET);
 
   // Update all genomes to new epoch
@@ -358,7 +389,7 @@ if (newEpoch !== currentEpoch) {
 
 // Write all genomes
 all.forEach(function(entry) {
-  fs.writeFileSync(entry.path, JSON.stringify(entry.genome, null, 2) + '\n');
+  saveGenome(entry.genome, entry.path);
 });
 
 console.log();

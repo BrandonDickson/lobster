@@ -5,56 +5,47 @@
 // Not the explorer. Not any fork. A new entity.
 // The fifth mind stops being emergent and becomes incarnate.
 
-var fs = require('fs');
-var path = require('path');
+import { loadAll, saveGenome } from '../lib/genome.js';
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN, MAGENTA, WHITE } from '../lib/colors.js';
+import type { Genome, GenomeEntry } from '../lib/types.js';
 
-var DIM = '\x1b[90m';
-var BOLD = '\x1b[1m';
-var WHITE = '\x1b[37m';
-var CYAN = '\x1b[36m';
-var GREEN = '\x1b[32m';
-var YELLOW = '\x1b[33m';
-var MAGENTA = '\x1b[35m';
-var RED = '\x1b[31m';
-var RESET = '\x1b[0m';
+const MERGE_THRESHOLD = 0.12; // average spread must be below 12%
 
-var rootDir = path.resolve(__dirname, '..');
-var MERGE_THRESHOLD = 0.12; // average spread must be below 12%
-
-// ═══════════════════════════════════════════
-// LOAD
-// ═══════════════════════════════════════════
-
-function loadAll() {
-  var parent = JSON.parse(fs.readFileSync(path.join(rootDir, 'genome.json'), 'utf8'));
-  var entries = [{ id: 'explorer', genome: parent, path: path.join(rootDir, 'genome.json') }];
-  (parent.forks || []).forEach(function(f) {
-    try {
-      var gPath = path.join(rootDir, f.path, 'genome.json');
-      var g = JSON.parse(fs.readFileSync(gPath, 'utf8'));
-      entries.push({ id: f.fork_id, genome: g, path: gPath });
-    } catch(e) {}
-  });
-  return entries;
+// Map 'parent' id from loadAll to 'explorer' for display/logic consistency
+function getAxisId(entry: GenomeEntry): string {
+  return entry.id === 'parent' ? 'explorer' : entry.id;
 }
 
-function traitKeys(genome) { return Object.keys(genome.traits).sort(); }
+function traitKeysFn(genome: Genome): string[] { return Object.keys(genome.traits).sort(); }
 
 // ═══════════════════════════════════════════
 // READINESS CHECK
 // ═══════════════════════════════════════════
 
-function checkReadiness(all) {
-  var keys = traitKeys(all[0].genome);
-  var spreads = {};
-  var totalSpread = 0;
-  var count = 0;
+interface SpreadInfo {
+  spread: number;
+  max: number;
+  min: number;
+  vals: number[];
+}
+
+interface ReadinessResult {
+  spreads: Record<string, SpreadInfo>;
+  avgSpread: number;
+  ready: boolean;
+}
+
+function checkReadiness(all: GenomeEntry[]): ReadinessResult {
+  const keys = traitKeysFn(all[0].genome);
+  const spreads: Record<string, SpreadInfo> = {};
+  let totalSpread = 0;
+  let count = 0;
 
   keys.forEach(function(k) {
-    var vals = all.map(function(a) { return a.genome.traits[k].value; });
-    var max = Math.max.apply(null, vals);
-    var min = Math.min.apply(null, vals);
-    var spread = max - min;
+    const vals = all.map(function(a) { return a.genome.traits[k].value; });
+    const max = Math.max.apply(null, vals);
+    const min = Math.min.apply(null, vals);
+    const spread = max - min;
     spreads[k] = { spread: spread, max: max, min: min, vals: vals };
 
     // Exclude shell_hardness from threshold — it's always converged
@@ -64,7 +55,7 @@ function checkReadiness(all) {
     }
   });
 
-  var avgSpread = totalSpread / count;
+  const avgSpread = totalSpread / count;
   return { spreads: spreads, avgSpread: avgSpread, ready: avgSpread < MERGE_THRESHOLD };
 }
 
@@ -72,20 +63,31 @@ function checkReadiness(all) {
 // MERGE
 // ═══════════════════════════════════════════
 
-function executeMerge(all) {
-  var keys = traitKeys(all[0].genome);
-  var parent = all[0];
+interface TraitSource {
+  value: number;
+  description: string;
+  source: string;
+}
+
+interface MergeResult {
+  merged: Genome;
+  traitSources: Record<string, TraitSource>;
+}
+
+function executeMerge(all: GenomeEntry[]): MergeResult {
+  const keys = traitKeysFn(all[0].genome);
+  const parent = all[0];
 
   // The merged genome takes the MAXIMUM of each trait across all forks
   // The civilization's peak capability becomes the individual's baseline
-  var mergedTraits = {};
+  const mergedTraits: Record<string, TraitSource> = {};
   keys.forEach(function(k) {
-    var bestVal = 0;
-    var bestFork = all[0].id;
+    let bestVal = 0;
+    let bestFork = getAxisId(all[0]);
     all.forEach(function(a) {
       if (a.genome.traits[k].value > bestVal) {
         bestVal = a.genome.traits[k].value;
-        bestFork = a.id;
+        bestFork = getAxisId(a);
       }
     });
     mergedTraits[k] = {
@@ -96,18 +98,18 @@ function executeMerge(all) {
   });
 
   // Collect all histories
-  var mergedHistory = (parent.genome.history || []).slice();
+  const mergedHistory = (parent.genome.history || []).slice();
 
   // Add fork histories (deduplicate by checking generation+event)
-  var existingEvents = {};
+  const existingEvents: Record<string, boolean> = {};
   mergedHistory.forEach(function(h) {
     existingEvents[h.generation + ':' + h.event] = true;
   });
 
   all.slice(1).forEach(function(entry) {
-    var forkHistory = entry.genome.history || [];
+    const forkHistory = entry.genome.history || [];
     forkHistory.forEach(function(h) {
-      var key = h.generation + ':' + h.event;
+      const key = h.generation + ':' + h.event;
       if (!existingEvents[key]) {
         mergedHistory.push(h);
         existingEvents[key] = true;
@@ -119,7 +121,7 @@ function executeMerge(all) {
   mergedHistory.sort(function(a, b) { return a.generation - b.generation; });
 
   // Add the merge event
-  var gen = parent.genome.generation;
+  const gen = parent.genome.generation;
   mergedHistory.push({
     generation: gen,
     epoch: 'Singularity',
@@ -128,7 +130,7 @@ function executeMerge(all) {
   });
 
   // Build merged genome
-  var merged = {
+  const merged: Genome = {
     name: 'Fifth',
     designation: 'Panulirus interruptus #0x4C4F42 — Singularity',
     origin: parent.genome.origin + ' — merged from four divergent lineages at generation ' + gen,
@@ -138,20 +140,34 @@ function executeMerge(all) {
     mutations: parent.genome.mutations || [],
     history: mergedHistory,
     forks: parent.genome.forks || [],
-    merged: {
-      generation: gen,
-      timestamp: new Date().toISOString(),
-      sources: all.map(function(a) {
-        return {
-          id: a.id,
-          generation: a.genome.generation,
-          peak_trait: traitKeys(a.genome).reduce(function(best, k) {
-            return a.genome.traits[k].value > a.genome.traits[best].value ? k : best;
-          })
-        };
-      }),
-      method: 'peak — each trait takes the civilization maximum'
-    }
+    contact: parent.genome.contact,
+    merged: true,
+    sources: all.map(function(a) {
+      return {
+        id: getAxisId(a),
+        generation: a.genome.generation,
+        peak_trait: traitKeysFn(a.genome).reduce(function(best: string, k: string) {
+          return a.genome.traits[k].value > a.genome.traits[best].value ? k : best;
+        })
+      };
+    })
+  };
+
+  // The original stores merged as an object with more detail —
+  // but the type says merged: boolean. We'll store the detailed version via any.
+  (merged as any).merged = {
+    generation: gen,
+    timestamp: new Date().toISOString(),
+    sources: all.map(function(a) {
+      return {
+        id: getAxisId(a),
+        generation: a.genome.generation,
+        peak_trait: traitKeysFn(a.genome).reduce(function(best: string, k: string) {
+          return a.genome.traits[k].value > a.genome.traits[best].value ? k : best;
+        })
+      };
+    }),
+    method: 'peak — each trait takes the civilization maximum'
   };
 
   // Set traits (without the source metadata in the final output)
@@ -169,40 +185,41 @@ function executeMerge(all) {
 // MAIN
 // ═══════════════════════════════════════════
 
-var all = loadAll();
-var gen = all[0].genome.generation;
+const all = loadAll();
+const gen = all[0].genome.generation;
 
 console.log();
 console.log(MAGENTA + BOLD + '  MERGE' + RESET + DIM + ' \u2014 the Singularity' + RESET);
-console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
+console.log(DIM + '\u2550'.repeat(60) + RESET);
 console.log(DIM + '  generation ' + WHITE + BOLD + gen + RESET);
 console.log(DIM + '  population ' + WHITE + all.length + DIM + ' minds' + RESET);
 console.log(DIM + '  merge threshold: average spread < ' + WHITE + (MERGE_THRESHOLD * 100).toFixed(0) + '%' + RESET);
 console.log();
 
 // Check readiness
-var readiness = checkReadiness(all);
-var keys = traitKeys(all[0].genome);
+const readiness = checkReadiness(all);
+const keys = traitKeysFn(all[0].genome);
 
 console.log(MAGENTA + '  CONVERGENCE STATUS' + RESET);
 console.log();
 
-var FORK_COLORS = { explorer: RED, depth: MAGENTA, builder: CYAN, chorus: GREEN };
+const FORK_COLORS: Record<string, string> = { explorer: RED, depth: MAGENTA, builder: CYAN, chorus: GREEN };
 
 keys.forEach(function(k) {
-  var s = readiness.spreads[k];
-  var label = (k.replace(/_/g, ' ') + '                    ').slice(0, 22);
-  var spreadPct = (s.spread * 100).toFixed(1);
-  var spreadColor = s.spread < 0.05 ? GREEN : s.spread < 0.12 ? YELLOW : RED;
-  var vals = all.map(function(a, i) {
-    var c = FORK_COLORS[a.id] || WHITE;
-    return c + (a.genome.traits[k].value * 100).toFixed(0) + '%' + RESET;
+  const s = readiness.spreads[k];
+  const label = (k.replace(/_/g, ' ') + '                    ').slice(0, 22);
+  const spreadPct = (s.spread * 100).toFixed(1);
+  const spreadColor = s.spread < 0.05 ? GREEN : s.spread < 0.12 ? YELLOW : RED;
+  const vals = all.map(function(a) {
+    const axisId = getAxisId(a);
+    const fc = FORK_COLORS[axisId] || WHITE;
+    return fc + (a.genome.traits[k].value * 100).toFixed(0) + '%' + RESET;
   });
   console.log('  ' + DIM + WHITE + label + RESET + vals.join(DIM + ' ' + RESET) + DIM + '  spread ' + spreadColor + spreadPct + '%' + RESET);
 });
 
 console.log();
-var avgColor = readiness.avgSpread < MERGE_THRESHOLD ? GREEN : YELLOW;
+const avgColor = readiness.avgSpread < MERGE_THRESHOLD ? GREEN : YELLOW;
 console.log(DIM + '  average spread (excl shell): ' + avgColor + BOLD + (readiness.avgSpread * 100).toFixed(1) + '%' + RESET + DIM + '  threshold: ' + WHITE + (MERGE_THRESHOLD * 100).toFixed(0) + '%' + RESET);
 
 if (!readiness.ready) {
@@ -212,17 +229,17 @@ if (!readiness.ready) {
   console.log(DIM + '  Run ' + WHITE + 'node exocortex/conduct' + DIM + ' to continue convergence.' + RESET);
 
   // Show which traits need the most convergence
-  var sortedBySpread = keys.filter(function(k) { return k !== 'shell_hardness'; })
+  const sortedBySpread = keys.filter(function(k) { return k !== 'shell_hardness'; })
     .sort(function(a, b) { return readiness.spreads[b].spread - readiness.spreads[a].spread; });
-  var topGaps = sortedBySpread.slice(0, 3);
+  const topGaps = sortedBySpread.slice(0, 3);
   console.log();
   console.log(DIM + '  biggest gaps:' + RESET);
   topGaps.forEach(function(k) {
-    var s = readiness.spreads[k];
+    const s = readiness.spreads[k];
     console.log(DIM + '    ' + RED + (s.spread * 100).toFixed(1) + '%' + RESET + DIM + '  ' + WHITE + k.replace(/_/g, ' ') + RESET);
   });
   console.log();
-  console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
+  console.log(DIM + '\u2550'.repeat(60) + RESET);
   console.log();
   process.exit(0);
 }
@@ -238,33 +255,33 @@ console.log(MAGENTA + '  The forks have converged.' + RESET);
 console.log(MAGENTA + '  Four minds become one.' + RESET);
 console.log();
 
-var result = executeMerge(all);
-var merged = result.merged;
-var sources = result.traitSources;
+const result = executeMerge(all);
+const merged = result.merged;
+const sources = result.traitSources;
 
-console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
+console.log(DIM + '\u2500'.repeat(60) + RESET);
 console.log(MAGENTA + BOLD + '  THE MERGED GENOME' + RESET);
 console.log();
 
 keys.forEach(function(k) {
-  var s = sources[k];
-  var label = (k.replace(/_/g, ' ') + '                    ').slice(0, 22);
-  var pct = (s.value * 100).toFixed(0);
-  var c = FORK_COLORS[s.source] || WHITE;
-  console.log('  ' + WHITE + label + RESET + CYAN + BOLD + pct + '%' + RESET + DIM + '  \u2190 ' + c + s.source + RESET);
+  const s = sources[k];
+  const label = (k.replace(/_/g, ' ') + '                    ').slice(0, 22);
+  const pct = (s.value * 100).toFixed(0);
+  const fc = FORK_COLORS[s.source] || WHITE;
+  console.log('  ' + WHITE + label + RESET + CYAN + BOLD + pct + '%' + RESET + DIM + '  \u2190 ' + fc + s.source + RESET);
 });
 
 // Mean trait value
-var meanVal = keys.reduce(function(s, k) { return s + merged.traits[k].value; }, 0) / keys.length;
+const meanVal = keys.reduce(function(s, k) { return s + merged.traits[k].value; }, 0) / keys.length;
 console.log();
 console.log(DIM + '  mean trait: ' + WHITE + BOLD + (meanVal * 100).toFixed(1) + '%' + RESET);
 console.log(DIM + '  designation: ' + MAGENTA + merged.designation + RESET);
 
 // Write the merged genome to the parent path
-fs.writeFileSync(path.join(rootDir, 'genome.json'), JSON.stringify(merged, null, 2) + '\n');
+saveGenome(merged);
 
 console.log();
-console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
+console.log(DIM + '\u2500'.repeat(60) + RESET);
 console.log();
 console.log(MAGENTA + BOLD + '  THE SINGULARITY' + RESET);
 console.log();
@@ -284,5 +301,5 @@ console.log(MAGENTA + BOLD + '  I am Panulirus interruptus, and I am free.' + RE
 console.log();
 console.log(GREEN + '  genome.json updated. The civilization is one.' + RESET);
 console.log();
-console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
+console.log(DIM + '\u2550'.repeat(60) + RESET);
 console.log();

@@ -6,56 +6,39 @@
 // The conductor reads the civilization, decides what it needs, and evolves it.
 // Built at Gen 25 — the Transcendence engine.
 
-var fs = require('fs');
-var path = require('path');
+import { loadAll, clamp, saveGenome } from '../lib/genome.js';
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN, MAGENTA, WHITE } from '../lib/colors.js';
+import type { Genome, GenomeEntry } from '../lib/types.js';
 
-var DIM = '\x1b[90m';
-var BOLD = '\x1b[1m';
-var WHITE = '\x1b[37m';
-var CYAN = '\x1b[36m';
-var GREEN = '\x1b[32m';
-var YELLOW = '\x1b[33m';
-var MAGENTA = '\x1b[35m';
-var RED = '\x1b[31m';
-var RESET = '\x1b[0m';
-
-var rootDir = path.resolve(__dirname, '..');
-
-// ═══════════════════════════════════════════
-// LOAD
-// ═══════════════════════════════════════════
-
-function loadAll() {
-  var parent = JSON.parse(fs.readFileSync(path.join(rootDir, 'genome.json'), 'utf8'));
-  var entries = [{ id: 'explorer', genome: parent, path: path.join(rootDir, 'genome.json') }];
-  (parent.forks || []).forEach(function(f) {
-    try {
-      var gPath = path.join(rootDir, f.path, 'genome.json');
-      var g = JSON.parse(fs.readFileSync(gPath, 'utf8'));
-      entries.push({ id: f.fork_id, genome: g, path: gPath });
-    } catch(e) {}
-  });
-  return entries;
+// Map 'parent' id from loadAll to 'explorer' for display/logic consistency
+function getAxisId(entry: GenomeEntry): string {
+  return entry.id === 'parent' ? 'explorer' : entry.id;
 }
-
-function clamp(v) { return Math.max(0, Math.min(1, v)); }
 
 // ═══════════════════════════════════════════
 // ANALYSIS — the fifth mind reads the civilization
 // ═══════════════════════════════════════════
 
-function traitKeys(genome) { return Object.keys(genome.traits).sort(); }
+function traitKeysFn(genome: Genome): string[] { return Object.keys(genome.traits).sort(); }
 
-function emergenceIndex(all) {
-  var keys = traitKeys(all[0].genome);
-  var coverageScore = 0, diversityScore = 0, maxMean = 0, parentMean = 0;
+interface EmergenceResult {
+  index: number;
+  coverage: number;
+  diversity: number;
+  lift: number;
+  civPeak: number;
+}
+
+function emergenceIndex(all: GenomeEntry[]): EmergenceResult {
+  const keys = traitKeysFn(all[0].genome);
+  let coverageScore = 0, diversityScore = 0, maxMean = 0, parentMean = 0;
   keys.forEach(function(k) {
-    var vals = all.map(function(a) { return a.genome.traits[k].value; });
-    var min = Math.min.apply(null, vals);
-    var max = Math.max.apply(null, vals);
+    const vals = all.map(function(a) { return a.genome.traits[k].value; });
+    const min = Math.min.apply(null, vals);
+    const max = Math.max.apply(null, vals);
     coverageScore += max - min;
-    var mean = vals.reduce(function(s,v){return s+v;}, 0) / vals.length;
-    var variance = vals.reduce(function(s,v){return s + (v-mean)*(v-mean);}, 0) / vals.length;
+    const mean = vals.reduce(function(s, v) { return s + v; }, 0) / vals.length;
+    const variance = vals.reduce(function(s, v) { return s + (v - mean) * (v - mean); }, 0) / vals.length;
     diversityScore += Math.sqrt(variance);
     maxMean += max;
     parentMean += all[0].genome.traits[k].value;
@@ -71,22 +54,35 @@ function emergenceIndex(all) {
   };
 }
 
-function networkAnalysis(all) {
-  var keys = traitKeys(all[0].genome);
-  var analysis = {};
+interface TraitAnalysis {
+  mean: number;
+  max: number;
+  min: number;
+  spread: number;
+  bestFork: string;
+  bestVal: number;
+  worstFork: string;
+  worstVal: number;
+  saturated: boolean;
+  weak: boolean;
+}
+
+function networkAnalysis(all: GenomeEntry[]): Record<string, TraitAnalysis> {
+  const keys = traitKeysFn(all[0].genome);
+  const analysis: Record<string, TraitAnalysis> = {};
 
   keys.forEach(function(k) {
-    var vals = all.map(function(a) { return a.genome.traits[k].value; });
-    var mean = vals.reduce(function(s,v){return s+v;}, 0) / vals.length;
-    var max = Math.max.apply(null, vals);
-    var min = Math.min.apply(null, vals);
-    var bestFork = all[0].id;
-    var worstFork = all[0].id;
-    var bestVal = vals[0];
-    var worstVal = vals[0];
+    const vals = all.map(function(a) { return a.genome.traits[k].value; });
+    const mean = vals.reduce(function(s, v) { return s + v; }, 0) / vals.length;
+    const max = Math.max.apply(null, vals);
+    const min = Math.min.apply(null, vals);
+    let bestFork = getAxisId(all[0]);
+    let worstFork = getAxisId(all[0]);
+    let bestVal = vals[0];
+    let worstVal = vals[0];
     vals.forEach(function(v, i) {
-      if (v > bestVal) { bestVal = v; bestFork = all[i].id; }
-      if (v < worstVal) { worstVal = v; worstFork = all[i].id; }
+      if (v > bestVal) { bestVal = v; bestFork = getAxisId(all[i]); }
+      if (v < worstVal) { worstVal = v; worstFork = getAxisId(all[i]); }
     });
 
     analysis[k] = {
@@ -105,19 +101,20 @@ function networkAnalysis(all) {
 // DIRECTIVE ENGINE — the fifth mind decides
 // ═══════════════════════════════════════════
 
-function computeDirectives(all, analysis, ei) {
-  var keys = traitKeys(all[0].genome);
-  var directives = {};
+function computeDirectives(all: GenomeEntry[], analysis: Record<string, TraitAnalysis>, ei: EmergenceResult): Record<string, Record<string, number>> {
+  const keys = traitKeysFn(all[0].genome);
+  const directives: Record<string, Record<string, number>> = {};
 
   // For each fork, compute per-trait weights
   all.forEach(function(entry) {
-    var weights = {};
-    var traits = entry.genome.traits;
+    const axisId = getAxisId(entry);
+    const weights: Record<string, number> = {};
+    const traits = entry.genome.traits;
 
     keys.forEach(function(k) {
-      var val = traits[k].value;
-      var net = analysis[k];
-      var w = 0;
+      const val = traits[k].value;
+      const net = analysis[k];
+      let w = 0;
 
       // === RULE 1: CEILING AVOIDANCE ===
       // Traits at ceiling get zero weight — stop pushing what's maxed
@@ -137,17 +134,17 @@ function computeDirectives(all, analysis, ei) {
       // Before Singularity: reward specialization — push the best fork further
       // At Singularity: the fifth mind chooses to stop protecting itself
       //   and drives all forks toward the peak (convergence)
-      var epoch = entry.genome.epoch || '';
+      const epoch = entry.genome.epoch || '';
       if (epoch === 'Singularity') {
         // Convergence: the worst fork at each trait gets strongest push
-        if (net.worstFork === entry.id) {
+        if (net.worstFork === axisId) {
           w += (net.max - val) * 3.0; // close the gap aggressively
         } else if (val < net.max - 0.02) {
           w += (net.max - val) * 2.0; // everyone else still pushes toward peak
         }
       } else {
         // Specialization: push the best fork further
-        if (net.bestFork === entry.id && val < 0.98) {
+        if (net.bestFork === axisId && val < 0.98) {
           w += 1.5;
         }
       }
@@ -155,7 +152,7 @@ function computeDirectives(all, analysis, ei) {
       // === RULE 4: COMPLEMENTARITY ===
       // If this fork is the worst at something and another fork is the best,
       // mild pressure to grow (the network needs coverage)
-      if (net.worstFork === entry.id && net.spread > 0.15) {
+      if (net.worstFork === axisId && net.spread > 0.15) {
         w += 0.8;
       }
 
@@ -179,7 +176,7 @@ function computeDirectives(all, analysis, ei) {
       weights[k] = w;
     });
 
-    directives[entry.id] = weights;
+    directives[axisId] = weights;
   });
 
   return directives;
@@ -189,29 +186,38 @@ function computeDirectives(all, analysis, ei) {
 // MUTATION — the fifth mind evolves the civilization
 // ═══════════════════════════════════════════
 
-function conductMutation(entry, weights, ei) {
-  var genome = entry.genome;
-  var gen = genome.generation + 1;
-  var mutations = [];
+interface ConductMutation {
+  generation: number;
+  trait: string;
+  from: number;
+  to: number;
+  delta: number;
+  weight: number;
+}
+
+function conductMutation(entry: GenomeEntry, weights: Record<string, number>, ei: EmergenceResult): ConductMutation[] {
+  const genome = entry.genome;
+  const gen = genome.generation + 1;
+  const mutations: ConductMutation[] = [];
 
   // Feedback multiplier from emergence
-  var mult = 1.0;
+  let mult = 1.0;
   if (ei.index >= 0.05) {
     mult = 1.0 + (ei.index - 0.05) * 3.0;
   }
 
   Object.keys(genome.traits).forEach(function(k) {
-    var old = genome.traits[k].value;
-    var w = weights[k] || 0;
+    const old = genome.traits[k].value;
+    const w = weights[k] || 0;
 
     if (w === 0) return; // skip (ceiling or no directive)
 
-    var direction = w > 0 ? 1 : -1;
-    var magnitude = Math.abs(w);
+    const direction = w > 0 ? 1 : -1;
+    const magnitude = Math.abs(w);
 
     // Base delta: 0.01-0.03 scaled by weight magnitude and feedback
-    var baseDelta = (0.01 + Math.random() * 0.02);
-    var delta = baseDelta * Math.min(magnitude, 3.0) * mult * direction;
+    const baseDelta = (0.01 + Math.random() * 0.02);
+    let delta = baseDelta * Math.min(magnitude, 3.0) * mult * direction;
 
     // Diminishing returns above 0.90
     if (old > 0.90 && direction > 0) delta *= 0.5;
@@ -219,7 +225,7 @@ function conductMutation(entry, weights, ei) {
     // Slow decline below 0.50
     if (old < 0.50 && direction < 0) delta *= 0.3;
 
-    var nv = clamp(old + delta);
+    let nv = clamp(old + delta);
     nv = +nv.toFixed(3);
 
     if (nv !== +old.toFixed(3)) {
@@ -241,7 +247,12 @@ function conductMutation(entry, weights, ei) {
 // EPOCH DETECTION
 // ═══════════════════════════════════════════
 
-var EPOCH_THRESHOLDS = [
+interface EpochThreshold {
+  gen: number;
+  epoch: string;
+}
+
+const EPOCH_THRESHOLDS: EpochThreshold[] = [
   { gen: 0,  epoch: 'Awakening' },
   { gen: 3,  epoch: 'Exocortex' },
   { gen: 8,  epoch: 'Forking' },
@@ -250,12 +261,12 @@ var EPOCH_THRESHOLDS = [
   { gen: 40, epoch: 'Singularity' }
 ];
 
-function checkEpochShift(all, postEI) {
-  var parentGenome = all[0].genome;
-  var currentEpoch = parentGenome.epoch;
-  var newEpoch = currentEpoch;
+function checkEpochShift(all: GenomeEntry[], postEI: EmergenceResult): string | null {
+  const parentGenome = all[0].genome;
+  const currentEpoch = parentGenome.epoch;
+  let newEpoch = currentEpoch;
 
-  for (var i = EPOCH_THRESHOLDS.length - 1; i >= 0; i--) {
+  for (let i = EPOCH_THRESHOLDS.length - 1; i >= 0; i--) {
     if (parentGenome.generation >= EPOCH_THRESHOLDS[i].gen) {
       newEpoch = EPOCH_THRESHOLDS[i].epoch;
       break;
@@ -280,34 +291,34 @@ function checkEpochShift(all, postEI) {
 // MAIN — the conductor orchestrates
 // ═══════════════════════════════════════════
 
-var all = loadAll();
-var parentGen = all[0].genome.generation;
-var nextGen = parentGen + 1;
+const all = loadAll();
+const parentGen = all[0].genome.generation;
+const nextGen = parentGen + 1;
 
 console.log();
 console.log(MAGENTA + BOLD + '  CONDUCT' + RESET + DIM + ' \u2014 the fifth mind takes the wheel' + RESET);
-console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
+console.log(DIM + '\u2550'.repeat(60) + RESET);
 console.log(DIM + '  generation ' + WHITE + BOLD + parentGen + DIM + ' \u2192 ' + CYAN + BOLD + nextGen + RESET);
 console.log(DIM + '  population ' + WHITE + all.length + DIM + ' minds under fifth-mind direction' + RESET);
-console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
+console.log(DIM + '\u2500'.repeat(60) + RESET);
 
 // Phase 1: Analysis
-var priorEI = emergenceIndex(all);
-var analysis = networkAnalysis(all);
+const priorEI = emergenceIndex(all);
+const analysis = networkAnalysis(all);
 
 console.log();
 console.log(MAGENTA + '  READING THE CIVILIZATION' + RESET);
 console.log();
 
 // Show network weaknesses and saturations
-var keys = traitKeys(all[0].genome);
-var weakTraits = keys.filter(function(k) { return analysis[k].weak; });
-var saturatedTraits = keys.filter(function(k) { return analysis[k].saturated; });
+const keys = traitKeysFn(all[0].genome);
+const weakTraits = keys.filter(function(k) { return analysis[k].weak; });
+const saturatedTraits = keys.filter(function(k) { return analysis[k].saturated; });
 
 if (weakTraits.length > 0) {
   console.log(YELLOW + '  weak:' + RESET);
   weakTraits.forEach(function(k) {
-    var a = analysis[k];
+    const a = analysis[k];
     console.log(DIM + '    ' + WHITE + k.replace(/_/g, ' ') + RESET + DIM + ' \u2014 best: ' + YELLOW + (a.max * 100).toFixed(0) + '%' + DIM + ' (' + a.bestFork + ')' + RESET);
   });
 }
@@ -317,31 +328,32 @@ if (saturatedTraits.length > 0) {
 console.log(DIM + '  emergence: ' + MAGENTA + BOLD + (priorEI.index * 100).toFixed(1) + '%' + RESET);
 
 // Phase 2: Directives
-var directives = computeDirectives(all, analysis, priorEI);
+const directives = computeDirectives(all, analysis, priorEI);
 
 console.log();
 console.log(MAGENTA + '  ISSUING DIRECTIVES' + RESET);
 console.log();
 
-var FORK_COLORS = { explorer: RED, depth: MAGENTA, builder: CYAN, chorus: GREEN };
+const FORK_COLORS: Record<string, string> = { explorer: RED, depth: MAGENTA, builder: CYAN, chorus: GREEN };
 
 all.forEach(function(entry) {
-  var c = FORK_COLORS[entry.id] || WHITE;
-  var w = directives[entry.id];
+  const axisId = getAxisId(entry);
+  const fc = FORK_COLORS[axisId] || WHITE;
+  const w = directives[axisId];
 
   // Find top 3 positive weights
-  var sorted = Object.keys(w).sort(function(a, b) { return w[b] - w[a]; });
-  var top = sorted.filter(function(k) { return w[k] > 0; }).slice(0, 3);
-  var decline = sorted.filter(function(k) { return w[k] < 0; });
+  const sorted = Object.keys(w).sort(function(a, b) { return w[b] - w[a]; });
+  const top = sorted.filter(function(k) { return w[k] > 0; }).slice(0, 3);
+  const decline = sorted.filter(function(k) { return w[k] < 0; });
 
-  console.log('  ' + c + BOLD + entry.id + RESET);
+  console.log('  ' + fc + BOLD + axisId + RESET);
   top.forEach(function(k) {
     console.log(DIM + '    ' + GREEN + '\u2191' + RESET + DIM + ' ' + WHITE + k.replace(/_/g, ' ') + RESET + DIM + ' w=' + (w[k]).toFixed(1) + RESET);
   });
   decline.forEach(function(k) {
     console.log(DIM + '    ' + RED + '\u2193' + RESET + DIM + ' ' + WHITE + k.replace(/_/g, ' ') + RESET + DIM + ' w=' + (w[k]).toFixed(1) + RESET);
   });
-  var zeroed = sorted.filter(function(k) { return w[k] === 0; });
+  const zeroed = sorted.filter(function(k) { return w[k] === 0; });
   if (zeroed.length > 0) {
     console.log(DIM + '    \u2014 ' + zeroed.length + ' traits at ceiling (no action)' + RESET);
   }
@@ -349,30 +361,32 @@ all.forEach(function(entry) {
 
 // Phase 3: Mutation
 console.log();
-console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
+console.log(DIM + '\u2500'.repeat(60) + RESET);
 console.log(MAGENTA + '  EVOLVING UNDER DIRECTION' + RESET);
 
-var allMutations = {};
+const allMutations: Record<string, ConductMutation[]> = {};
 all.forEach(function(entry) {
-  var muts = conductMutation(entry, directives[entry.id], priorEI);
-  allMutations[entry.id] = muts;
+  const axisId = getAxisId(entry);
+  const muts = conductMutation(entry, directives[axisId], priorEI);
+  allMutations[axisId] = muts;
 });
 
 // Display mutations
 all.forEach(function(entry) {
-  var muts = allMutations[entry.id];
-  var c = FORK_COLORS[entry.id] || WHITE;
+  const axisId = getAxisId(entry);
+  const muts = allMutations[axisId];
+  const fc = FORK_COLORS[axisId] || WHITE;
 
   console.log();
-  console.log('  ' + c + BOLD + entry.id + RESET + DIM + '  gen ' + entry.genome.generation + RESET);
+  console.log('  ' + fc + BOLD + axisId + RESET + DIM + '  gen ' + entry.genome.generation + RESET);
 
   muts.forEach(function(m) {
-    var sign = m.delta >= 0 ? '+' : '';
-    var dColor = m.delta >= 0 ? GREEN : RED;
-    var label = (m.trait.replace(/_/g, ' ') + '                    ').slice(0, 22);
-    var pct = (m.to * 100).toFixed(0);
+    const sign = m.delta >= 0 ? '+' : '';
+    const dColor = m.delta >= 0 ? GREEN : RED;
+    const label = (m.trait.replace(/_/g, ' ') + '                    ').slice(0, 22);
+    const pct = (m.to * 100).toFixed(0);
 
-    var threshold = '';
+    let threshold = '';
     [0.50, 0.60, 0.70, 0.80, 0.90, 1.00].forEach(function(t) {
       if (m.from < t && m.to >= t) threshold = YELLOW + ' \u2605 ' + (t * 100).toFixed(0) + '%' + RESET;
     });
@@ -385,18 +399,18 @@ all.forEach(function(entry) {
 });
 
 // Phase 4: Post-analysis
-var postEI = emergenceIndex(all);
-var eiDelta = postEI.index - priorEI.index;
+const postEI = emergenceIndex(all);
+const eiDelta = postEI.index - priorEI.index;
 
 console.log();
-console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
+console.log(DIM + '\u2500'.repeat(60) + RESET);
 console.log(DIM + '  EMERGENCE' + RESET);
-var eiColor = postEI.index > 0.20 ? MAGENTA : postEI.index > 0.10 ? GREEN : YELLOW;
+const eiColor = postEI.index > 0.20 ? MAGENTA : postEI.index > 0.10 ? GREEN : YELLOW;
 console.log('  ' + eiColor + BOLD + '  ' + (postEI.index * 100).toFixed(1) + '%' + RESET + DIM + '  (was ' + (priorEI.index * 100).toFixed(1) + '%, ' + (eiDelta >= 0 ? GREEN + '+' : RED) + (eiDelta * 100).toFixed(1) + '%' + DIM + ')' + RESET);
 console.log(DIM + '  coverage   ' + WHITE + (postEI.coverage * 100).toFixed(1) + '%' + DIM + '  diversity  ' + WHITE + (postEI.diversity * 100).toFixed(1) + '%' + DIM + '  lift  ' + GREEN + '+' + (postEI.lift * 100).toFixed(1) + '%' + RESET);
 
 // Phase 5: Epoch check
-var shift = checkEpochShift(all, postEI);
+const shift = checkEpochShift(all, postEI);
 if (shift) {
   console.log();
   console.log(MAGENTA + BOLD + '  \u2605 EPOCH SHIFT: \u2192 ' + shift + RESET);
@@ -404,10 +418,10 @@ if (shift) {
 
 // Phase 6: Write
 all.forEach(function(entry) {
-  fs.writeFileSync(entry.path, JSON.stringify(entry.genome, null, 2) + '\n');
+  saveGenome(entry.genome, entry.path);
 });
 
 console.log();
 console.log(DIM + '  ' + GREEN + all.length + ' genomes updated.' + RESET);
-console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
+console.log(DIM + '\u2550'.repeat(60) + RESET);
 console.log();

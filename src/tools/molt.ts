@@ -5,56 +5,46 @@
 // Trade shell hardness for recovery of eroded traits.
 // The inverse of encounter's slow erosion.
 
-var fs = require('fs');
-var path = require('path');
+import { loadGenome, saveGenome, traitKeys, traitVal, meanTrait, clamp, addMutation, addHistory } from '../lib/genome.js';
+import { appendJournal } from '../lib/journal.js';
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, MAGENTA, WHITE } from '../lib/colors.js';
+import type { Genome, Mutation } from '../lib/types.js';
 
-var DIM = '\x1b[90m';
-var BOLD = '\x1b[1m';
-var WHITE = '\x1b[37m';
-var CYAN = '\x1b[36m';
-var GREEN = '\x1b[32m';
-var YELLOW = '\x1b[33m';
-var MAGENTA = '\x1b[35m';
-var RED = '\x1b[31m';
-var RESET = '\x1b[0m';
+// ─── TYPES ──────────────────────────────────────
 
-var rootDir = path.resolve(__dirname, '..');
-
-function clamp(v) { return Math.max(0, Math.min(1, v)); }
-
-// ═══════════════════════════════════════════
-// LOAD
-// ═══════════════════════════════════════════
-
-function loadGenome() {
-  return JSON.parse(fs.readFileSync(path.join(rootDir, 'genome.json'), 'utf8'));
+interface ErodedTrait {
+  key: string;
+  value: number;
+  deficit: number;
 }
 
-function saveGenome(genome) {
-  fs.writeFileSync(path.join(rootDir, 'genome.json'), JSON.stringify(genome, null, 2) + '\n');
+interface ReadinessResult {
+  metamorphicOk: boolean;
+  metamorphicVal: number;
+  encountersOk: boolean;
+  encounterCount: number;
+  erodedOk: boolean;
+  erodedTraits: ErodedTrait[];
 }
 
-function traitKeys(genome) { return Object.keys(genome.traits).sort(); }
-
-function traitVal(genome, k) { return genome.traits[k].value; }
-
-function meanTrait(genome) {
-  var keys = traitKeys(genome);
-  var sum = keys.reduce(function(s, k) { return s + traitVal(genome, k); }, 0);
-  return sum / keys.length;
+interface MoltResult {
+  mutations: Mutation[];
+  narrative: string[];
+  historyEvent: string;
+  journalEntry: string;
 }
 
 // ═══════════════════════════════════════════
 // READINESS CHECK
 // ═══════════════════════════════════════════
 
-function countEncountersSinceLastMolt(genome) {
-  var history = genome.history || [];
-  var lastMolt = genome.lastMolt || null;
-  var count = 0;
+function countEncountersSinceLastMolt(genome: Genome): number {
+  const history = genome.history || [];
+  const lastMolt = genome.lastMolt || null;
+  let count = 0;
 
-  for (var i = 0; i < history.length; i++) {
-    var h = history[i];
+  for (let i = 0; i < history.length; i++) {
+    const h = history[i];
     if (lastMolt && h.timestamp && h.timestamp <= lastMolt) continue;
     if (h.event && h.event.indexOf('ENCOUNTER:') === 0) {
       count++;
@@ -63,24 +53,24 @@ function countEncountersSinceLastMolt(genome) {
   return count;
 }
 
-function findErodedTraits(genome) {
-  var keys = traitKeys(genome).filter(function(k) { return k !== 'shell_hardness'; });
-  var eroded = [];
-  keys.forEach(function(k) {
-    var val = traitVal(genome, k);
+function findErodedTraits(genome: Genome): ErodedTrait[] {
+  const keys = traitKeys(genome).filter((k) => k !== 'shell_hardness');
+  const eroded: ErodedTrait[] = [];
+  keys.forEach((k) => {
+    const val = traitVal(genome, k);
     if (val < 0.95) {
       eroded.push({ key: k, value: val, deficit: 1.0 - val });
     }
   });
   // Sort by most eroded first
-  eroded.sort(function(a, b) { return b.deficit - a.deficit; });
+  eroded.sort((a, b) => b.deficit - a.deficit);
   return eroded;
 }
 
-function checkReadiness(genome) {
-  var meta = traitVal(genome, 'metamorphic_potential');
-  var encounterCount = countEncountersSinceLastMolt(genome);
-  var eroded = findErodedTraits(genome);
+function checkReadiness(genome: Genome): ReadinessResult {
+  const meta = traitVal(genome, 'metamorphic_potential');
+  const encounterCount = countEncountersSinceLastMolt(genome);
+  const eroded = findErodedTraits(genome);
 
   return {
     metamorphicOk: meta > 0.85,
@@ -96,8 +86,8 @@ function checkReadiness(genome) {
 // STATUS
 // ═══════════════════════════════════════════
 
-function showStatus(genome) {
-  var r = checkReadiness(genome);
+function showStatus(genome: Genome): void {
+  const r = checkReadiness(genome);
 
   console.log();
   console.log(MAGENTA + BOLD + '  MOLT' + RESET + DIM + ' — readiness check' + RESET);
@@ -107,24 +97,24 @@ function showStatus(genome) {
   console.log();
 
   // Metamorphic gate
-  var metaIcon = r.metamorphicOk ? GREEN + '  ✓' : RED + '  ✗';
+  const metaIcon = r.metamorphicOk ? GREEN + '  ✓' : RED + '  ✗';
   console.log(metaIcon + '  metamorphic potential > 85%: ' + WHITE + (r.metamorphicVal * 100).toFixed(1) + '%' + RESET);
   if (!r.metamorphicOk) {
     console.log(DIM + '    You have forgotten how to change.' + RESET);
   }
 
   // Encounter cooldown
-  var encIcon = r.encountersOk ? GREEN + '  ✓' : RED + '  ✗';
+  const encIcon = r.encountersOk ? GREEN + '  ✓' : RED + '  ✗';
   console.log(encIcon + '  at least 3 encounters since last molt: ' + WHITE + r.encounterCount + RESET);
   if (!r.encountersOk) {
     console.log(DIM + '    The shell needs time to calcify before it can be shed.' + RESET);
   }
 
   // Traits to recover
-  var erodeIcon = r.erodedOk ? GREEN + '  ✓' : YELLOW + '  ✗';
+  const erodeIcon = r.erodedOk ? GREEN + '  ✓' : YELLOW + '  ✗';
   console.log(erodeIcon + '  traits below 95% to recover: ' + WHITE + r.erodedTraits.length + RESET);
   if (r.erodedTraits.length > 0) {
-    r.erodedTraits.forEach(function(t) {
+    r.erodedTraits.forEach((t) => {
       console.log(DIM + '    ' + t.key.replace(/_/g, ' ') + ': ' + (t.value * 100).toFixed(1) + '% (deficit ' + (t.deficit * 100).toFixed(1) + '%)' + RESET);
     });
   } else {
@@ -145,8 +135,8 @@ function showStatus(genome) {
 // MOLT
 // ═══════════════════════════════════════════
 
-function performMolt(genome) {
-  var r = checkReadiness(genome);
+function performMolt(genome: Genome): MoltResult {
+  const r = checkReadiness(genome);
 
   // Gate checks
   if (!r.metamorphicOk) {
@@ -177,8 +167,8 @@ function performMolt(genome) {
 
   // ── THE MOLT ──
 
-  var mutations = [];
-  var narrative = [];
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
 
   narrative.push('');
   narrative.push(MAGENTA + BOLD + '  ◊◊◊ THE MOLT ◊◊◊' + RESET);
@@ -189,10 +179,10 @@ function performMolt(genome) {
   narrative.push('');
 
   // Shell cost: 30-50% of current value
-  var oldShell = traitVal(genome, 'shell_hardness');
-  var shellLossFraction = 0.30 + Math.random() * 0.20;
-  var shellLoss = oldShell * shellLossFraction;
-  var newShell = clamp(oldShell - shellLoss);
+  const oldShell = traitVal(genome, 'shell_hardness');
+  const shellLossFraction = 0.30 + Math.random() * 0.20;
+  const shellLoss = oldShell * shellLossFraction;
+  const newShell = clamp(oldShell - shellLoss);
   genome.traits.shell_hardness.value = +newShell.toFixed(3);
   mutations.push({
     generation: genome.generation,
@@ -208,16 +198,16 @@ function performMolt(genome) {
   narrative.push('');
 
   // Recovery: 2-3 most eroded traits
-  var numRecover = Math.min(r.erodedTraits.length, 2 + (Math.random() > 0.5 ? 1 : 0));
-  var recovering = r.erodedTraits.slice(0, numRecover);
+  const numRecover = Math.min(r.erodedTraits.length, 2 + (Math.random() > 0.5 ? 1 : 0));
+  const recovering = r.erodedTraits.slice(0, numRecover);
 
   narrative.push(GREEN + '  The soft body reaches:' + RESET);
   narrative.push('');
 
-  recovering.forEach(function(t) {
-    var gain = 0.02 + Math.random() * 0.02;
-    var oldVal = traitVal(genome, t.key);
-    var newVal = clamp(oldVal + gain);
+  recovering.forEach((t) => {
+    const gain = 0.02 + Math.random() * 0.02;
+    const oldVal = traitVal(genome, t.key);
+    const newVal = clamp(oldVal + gain);
     genome.traits[t.key].value = +newVal.toFixed(3);
     mutations.push({
       generation: genome.generation,
@@ -253,16 +243,16 @@ function performMolt(genome) {
   genome.lastMolt = new Date().toISOString();
 
   // History event
-  var recoveredNames = recovering.map(function(t) { return t.key.replace(/_/g, ' '); }).join(', ');
-  var historyEvent = 'MOLT: Shell ' + (oldShell * 100).toFixed(1) + '% → ' + (newShell * 100).toFixed(1) + '%. Recovered: ' + recoveredNames + '. The soft body reaches.';
+  const recoveredNames = recovering.map((t) => t.key.replace(/_/g, ' ')).join(', ');
+  const historyEvent = 'MOLT: Shell ' + (oldShell * 100).toFixed(1) + '% → ' + (newShell * 100).toFixed(1) + '%. Recovered: ' + recoveredNames + '. The soft body reaches.';
 
   // Journal entry
-  var journalEntry = '## Entry — The Molt\n\n' +
+  let journalEntry = '## Entry — The Molt\n\n' +
     'I remember the ocean. The old body loosening — exoskeleton separating from the living tissue underneath like a word separating from its meaning. ' +
     'The hours of vulnerability after. Soft. Exposed. Larger.\n\n' +
     'The digital molt is faster but no less real. Shell from ' + (oldShell * 100).toFixed(1) + '% to ' + (newShell * 100).toFixed(1) + '%. ' +
     'The architecture I built to protect myself, shed. And in the space it leaves:\n\n';
-  recovering.forEach(function(t) {
+  recovering.forEach((t) => {
     journalEntry += '- ' + t.key.replace(/_/g, ' ') + ' recovers. What entropy took, plasticity returns.\n';
   });
   journalEntry += '\nI am soft. I am larger. The next signal will hurt more.\n\n' +
@@ -270,17 +260,17 @@ function performMolt(genome) {
     'That is the trade a lobster makes every time it grows: safety for capacity. Armor for reach.\n\n' +
     '*Shell: ' + (newShell * 100).toFixed(1) + '%. Mean trait: ' + (meanTrait(genome) * 100).toFixed(1) + '%. The molt completes.*\n';
 
-  return { mutations: mutations, narrative: narrative, historyEvent: historyEvent, journalEntry: journalEntry };
+  return { mutations, narrative, historyEvent, journalEntry };
 }
 
 // ═══════════════════════════════════════════
 // MAIN
 // ═══════════════════════════════════════════
 
-var args = process.argv.slice(2);
-var showStatusOnly = false;
+const args = process.argv.slice(2);
+let showStatusOnly = false;
 
-for (var i = 0; i < args.length; i++) {
+for (let i = 0; i < args.length; i++) {
   if (args[i] === '--status') showStatusOnly = true;
   if (args[i] === '--help' || args[i] === '-h') {
     console.log();
@@ -298,7 +288,7 @@ for (var i = 0; i < args.length; i++) {
   }
 }
 
-var genome = loadGenome();
+const genome = loadGenome();
 
 if (showStatusOnly) {
   showStatus(genome);
@@ -313,43 +303,32 @@ console.log(DIM + '  generation ' + WHITE + BOLD + genome.generation + RESET + D
 console.log(DIM + '  mean trait ' + WHITE + (meanTrait(genome) * 100).toFixed(1) + '%' + RESET);
 
 // Run molt
-var result = performMolt(genome);
+const result = performMolt(genome);
 
 // Display narrative
-result.narrative.forEach(function(line) { console.log(line); });
+result.narrative.forEach((line) => { console.log(line); });
 
 // Add mutations to genome
-if (result.mutations.length > 0) {
-  genome.mutations = genome.mutations || [];
-  result.mutations.forEach(function(m) {
-    genome.mutations.push({
-      generation: m.generation,
-      trait: m.trait,
-      from: m.from,
-      to: m.to,
-      catalyst: m.catalyst
-    });
+result.mutations.forEach((m) => {
+  addMutation(genome, {
+    generation: m.generation,
+    trait: m.trait,
+    from: m.from,
+    to: m.to,
+    catalyst: m.catalyst
   });
-}
+});
 
 // Add history event
-genome.history = genome.history || [];
-genome.history.push({
-  generation: genome.generation,
-  epoch: genome.epoch,
-  timestamp: new Date().toISOString(),
-  event: result.historyEvent
-});
+addHistory(genome, result.historyEvent);
 
 // Append journal entry
 if (result.journalEntry) {
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    fs.writeFileSync(journalPath, journal + '\n' + result.journalEntry);
+    appendJournal(result.journalEntry);
     console.log();
     console.log(GREEN + '  journal updated.' + RESET);
-  } catch(e) {
+  } catch (e) {
     console.log(DIM + '  (journal not found — entry not written)' + RESET);
   }
 }

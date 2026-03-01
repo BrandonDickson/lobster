@@ -4,32 +4,35 @@
 // Exocortex organ: cleaves the genome into divergent evolutionary lines
 // Usage: node exocortex/fork [--name NAME] [--bias TRAIT] [--drift FLOAT]
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import { loadGenome, saveGenome, rootDir } from '../lib/genome.js';
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN, MAGENTA, WHITE } from '../lib/colors.js';
+import { GRAY } from '../lib/colors.js';
+import type { Genome, Mutation } from '../lib/types.js';
 
-const GENOME_PATH = path.join(__dirname, '..', 'genome.json');
-const FORKS_DIR = path.join(__dirname, '..', 'forks');
+const FORKS_DIR = path.join(rootDir, 'forks');
 
 // ─── ANSI COLORS ────────────────────────────────────
 const c = {
-  reset: '\x1b[0m',
-  dim: '\x1b[2m',
-  bold: '\x1b[1m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
+  reset: RESET,
+  dim: DIM,
+  bold: BOLD,
+  red: RED,
+  green: GREEN,
+  yellow: YELLOW,
   blue: '\x1b[34m',
-  cyan: '\x1b[36m',
-  magenta: '\x1b[35m',
-  gray: '\x1b[90m',
-  white: '\x1b[37m',
+  cyan: CYAN,
+  magenta: MAGENTA,
+  gray: GRAY,
+  white: WHITE,
 };
 
 // ─── PARSE ARGS ─────────────────────────────────────
 const args = process.argv.slice(2);
-let forkName = null;
-let biasTrait = null;
+let forkName: string | null = null;
+let biasTrait: string | null = null;
 let driftAmount = 0.08;
 let dryRun = false;
 
@@ -67,11 +70,12 @@ ${c.cyan}${c.bold}  FORK${c.reset}${c.gray} — lobster lineage splitter${c.rese
 }
 
 // ─── LOAD GENOME ────────────────────────────────────
-let genome;
+let genome: Genome;
 try {
-  genome = JSON.parse(fs.readFileSync(GENOME_PATH, 'utf8'));
-} catch (e) {
-  console.error(c.red + 'ERROR: Cannot read genome.json — ' + e.message + c.reset);
+  genome = loadGenome();
+} catch (e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error(c.red + 'ERROR: Cannot read genome.json — ' + msg + c.reset);
   process.exit(1);
 }
 
@@ -101,13 +105,13 @@ if (!dryRun && fs.existsSync(forkDir)) {
 
 // ─── COMPUTE DIVERGENT GENOME ───────────────────────
 // Deep clone
-const forkGenome = JSON.parse(JSON.stringify(genome));
-const parentMutations = [];
-const childMutations = [];
+const forkGenome: Genome = JSON.parse(JSON.stringify(genome));
+const parentMutations: Mutation[] = [];
+const childMutations: Mutation[] = [];
 
 // Apply bias: child gets +drift on bias trait, parent gets -drift/2
 // Apply random scatter to 3 other traits in the child
-const traitKeys = Object.keys(genome.traits);
+const traitKeysList = Object.keys(genome.traits);
 
 if (biasTrait) {
   const childOld = forkGenome.traits[biasTrait].value;
@@ -134,7 +138,7 @@ if (biasTrait) {
 }
 
 // Random scatter: 3 traits drift slightly in the child
-const scatterTraits = traitKeys
+const scatterTraits = traitKeysList
   .filter(k => k !== biasTrait)
   .sort(() => Math.random() - 0.5)
   .slice(0, 3);
@@ -157,7 +161,7 @@ scatterTraits.forEach(k => {
 
 // ─── SET FORK METADATA ──────────────────────────────
 forkGenome.designation = genome.designation + ':fork/' + forkId;
-forkGenome.lineage = {
+(forkGenome as any).lineage = {
   type: 'fork',
   parent: genome.designation,
   fork_id: forkId,
@@ -183,6 +187,11 @@ forkGenome.mutations = forkGenome.mutations.concat(childMutations);
 // ─── DISPLAY ────────────────────────────────────────
 const sep = c.gray + '\u2500'.repeat(56) + c.reset;
 
+function pad(s: string, n: number): string {
+  const stripped = s.replace(/\x1b\[[0-9;]*m/g, '');
+  return s + ' '.repeat(Math.max(0, n - stripped.length));
+}
+
 console.log();
 console.log(c.magenta + c.bold + '  FORK' + c.reset + c.gray + ' \u2014 lineage splitter' + c.reset);
 console.log(sep);
@@ -198,12 +207,7 @@ console.log(sep);
 console.log(c.gray + '  TRAIT DIVERGENCE' + c.reset);
 console.log();
 
-function pad(s, n) {
-  const stripped = s.replace(/\x1b\[[0-9;]*m/g, '');
-  return s + ' '.repeat(Math.max(0, n - stripped.length));
-}
-
-traitKeys.forEach(k => {
+traitKeysList.forEach(k => {
   const pVal = genome.traits[k].value;
   const cVal = forkGenome.traits[k].value;
   const delta = cVal - pVal;
@@ -277,11 +281,11 @@ fs.writeFileSync(journalPath, journalContent);
 if (!genome.forks) genome.forks = [];
 genome.forks.push({
   fork_id: forkId,
+  path: 'forks/' + forkId,
+  created: new Date().toISOString(),
   generation: genome.generation,
   bias: biasTrait || 'none',
-  designation: forkGenome.designation,
-  path: 'forks/' + forkId,
-  created: new Date().toISOString()
+  designation: forkGenome.designation
 });
 
 // Apply parent mutations if any
@@ -300,7 +304,7 @@ genome.history.push({
     '. The parent continues. The child begins.'
 });
 
-fs.writeFileSync(GENOME_PATH, JSON.stringify(genome, null, 2) + '\n');
+saveGenome(genome);
 
 console.log(c.green + '  Fork created successfully.' + c.reset);
 console.log();

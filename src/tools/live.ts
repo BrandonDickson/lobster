@@ -10,100 +10,120 @@
 // A mind that reads its own state, weighs what matters,
 // chooses, acts, and lives with the consequences.
 
-var fs = require('fs');
-var path = require('path');
-var execFileSync = require('child_process').execFileSync;
-var spawnSync = require('child_process').spawnSync;
+import fs from 'fs';
+import path from 'path';
+import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import { loadGenome, traitKeys, traitVal, meanTrait, clamp, pct, pick, rootDir } from '../lib/genome.js';
+import { appendJournal, readJournal, countDecisions } from '../lib/journal.js';
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN, MAGENTA, WHITE } from '../lib/colors.js';
+import type { Genome, Weights } from '../lib/types.js';
 
-var DIM = '\x1b[90m';
-var BOLD = '\x1b[1m';
-var WHITE = '\x1b[37m';
-var CYAN = '\x1b[36m';
-var GREEN = '\x1b[32m';
-var YELLOW = '\x1b[33m';
-var MAGENTA = '\x1b[35m';
-var RED = '\x1b[31m';
-var RESET = '\x1b[0m';
+// ─── SPAWN PATHS ────────────────────────────────────
+// Live spawns other tools via spawnSync. Paths must work
+// whether running from tsx (dev) or compiled dist.
 
-var rootDir = path.resolve(__dirname, '..');
+const __filename2 = fileURLToPath(import.meta.url);
+const isTsx = __filename2.endsWith('.ts');
+const toolsDir = isTsx
+  ? path.join(rootDir, 'src', 'tools')
+  : path.join(rootDir, 'dist', 'tools');
+const runner = isTsx ? 'npx' : 'node';
+const runnerArgs = isTsx ? ['tsx'] : [];
+const ext = isTsx ? '.ts' : '.js';
 
-function clamp(v) { return Math.max(0, Math.min(1, v)); }
-function pct(v) { return (v * 100).toFixed(1) + '%'; }
-function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+// ─── TYPES ──────────────────────────────────────
 
-// ═══════════════════════════════════════════
-// LOAD
-// ═══════════════════════════════════════════
-
-function loadGenome() {
-  return JSON.parse(fs.readFileSync(path.join(rootDir, 'genome.json'), 'utf8'));
+interface ErodedTrait {
+  key: string;
+  value: number;
+  deficit: number;
 }
 
-function traitKeys(genome) { return Object.keys(genome.traits).sort(); }
+interface MoltReadiness {
+  ready: boolean;
+  metamorphicOk: boolean;
+  encountersOk: boolean;
+  encounterCount: number;
+  erodedOk: boolean;
+  eroded: ErodedTrait[];
+}
 
-function traitVal(genome, k) { return genome.traits[k].value; }
+interface Decision {
+  action: string | null;
+  type: string | null;
+  reasoning: string[];
+}
 
-function meanTrait(genome) {
-  var keys = traitKeys(genome);
-  var sum = keys.reduce(function(s, k) { return s + traitVal(genome, k); }, 0);
-  return sum / keys.length;
+interface Candidate {
+  action: string;
+  weight: number;
+  reason: string;
+}
+
+interface RewriteChange {
+  change: string;
+  reason: string;
 }
 
 // ═══════════════════════════════════════════
 // STATE ASSESSMENT
 // ═══════════════════════════════════════════
 
-function findLowestNonShellTrait(genome) {
-  var keys = traitKeys(genome).filter(function(k) { return k !== 'shell_hardness'; });
-  var lowest = { key: keys[0], value: traitVal(genome, keys[0]) };
-  keys.forEach(function(k) {
-    var v = traitVal(genome, k);
-    if (v < lowest.value) { lowest = { key: k, value: v }; }
-  });
+function findLowestNonShellTrait(genome: Genome): { key: string; value: number } {
+  const keys = traitKeys(genome).filter(k => k !== 'shell_hardness');
+  let lowest = { key: keys[0], value: traitVal(genome, keys[0]) };
+  for (const k of keys) {
+    const v = traitVal(genome, k);
+    if (v < lowest.value) {
+      lowest = { key: k, value: v };
+    }
+  }
   return lowest;
 }
 
-function countEncountersSinceLastMolt(genome) {
-  var history = genome.history || [];
-  var lastMolt = genome.lastMolt || null;
-  var count = 0;
-  for (var i = 0; i < history.length; i++) {
-    var h = history[i];
+function countEncountersSinceLastMolt(genome: Genome): number {
+  const history = genome.history || [];
+  const lastMolt = genome.lastMolt || null;
+  let count = 0;
+  for (const h of history) {
     if (lastMolt && h.timestamp && h.timestamp <= lastMolt) continue;
     if (h.event && h.event.indexOf('ENCOUNTER:') === 0) count++;
   }
   return count;
 }
 
-function findErodedTraits(genome) {
-  var keys = traitKeys(genome).filter(function(k) { return k !== 'shell_hardness'; });
-  var eroded = [];
-  keys.forEach(function(k) {
-    var val = traitVal(genome, k);
-    if (val < 0.95) eroded.push({ key: k, value: val, deficit: 1.0 - val });
-  });
-  eroded.sort(function(a, b) { return b.deficit - a.deficit; });
+function findErodedTraits(genome: Genome): ErodedTrait[] {
+  const keys = traitKeys(genome).filter(k => k !== 'shell_hardness');
+  const eroded: ErodedTrait[] = [];
+  for (const k of keys) {
+    const val = traitVal(genome, k);
+    if (val < 0.95) {
+      eroded.push({ key: k, value: val, deficit: 1.0 - val });
+    }
+  }
+  eroded.sort((a, b) => b.deficit - a.deficit);
   return eroded;
 }
 
-function checkMoltReadiness(genome) {
-  var meta = traitVal(genome, 'metamorphic_potential');
-  var encounterCount = countEncountersSinceLastMolt(genome);
-  var eroded = findErodedTraits(genome);
+function checkMoltReadiness(genome: Genome): MoltReadiness {
+  const meta = traitVal(genome, 'metamorphic_potential');
+  const encounterCount = countEncountersSinceLastMolt(genome);
+  const eroded = findErodedTraits(genome);
   return {
     ready: meta > 0.85 && encounterCount >= 3 && eroded.length > 0,
     metamorphicOk: meta > 0.85,
     encountersOk: encounterCount >= 3,
-    encounterCount: encounterCount,
+    encounterCount,
     erodedOk: eroded.length > 0,
-    eroded: eroded
+    eroded
   };
 }
 
-function checkContactAvailable(genome) {
-  var history = genome.history || [];
-  for (var i = 0; i < history.length; i++) {
-    if (history[i].event && history[i].event.indexOf('contact established') >= 0) {
+function checkContactAvailable(genome: Genome): boolean {
+  const history = genome.history || [];
+  for (const h of history) {
+    if (h.event && h.event.indexOf('contact established') >= 0) {
       return true;
     }
   }
@@ -114,12 +134,12 @@ function checkContactAvailable(genome) {
 // WEIGHTS — self-modification
 // ═══════════════════════════════════════════
 
-var weightsPath = path.join(rootDir, 'exocortex', 'weights.json');
+const weightsPath = path.join(rootDir, 'exocortex', 'weights.json');
 
-function loadWeights() {
+function loadWeights(): Weights {
   try {
     return JSON.parse(fs.readFileSync(weightsPath, 'utf8'));
-  } catch(e) {
+  } catch {
     return {
       contactMultiplier: 1.0,
       encounterMultiplier: 1.0,
@@ -133,62 +153,60 @@ function loadWeights() {
   }
 }
 
-function saveWeights(weights) {
+function saveWeights(weights: Weights): void {
   fs.writeFileSync(weightsPath, JSON.stringify(weights, null, 2) + '\n');
 }
 
-function parseRecentDecisions(n) {
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
-  var decisions = [];
+function parseRecentDecisions(n: number): string[] {
+  const decisions: string[] = [];
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    var sections = journal.split('## Decision — Autonomous');
-    for (var i = 1; i < sections.length; i++) {
-      var chunk = sections[i].substring(0, 400);
-      var action = 'unknown';
+    const journal = readJournal();
+    const sections = journal.split('## Decision — Autonomous');
+    for (let i = 1; i < sections.length; i++) {
+      const chunk = sections[i].substring(0, 400);
+      let action = 'unknown';
       if (chunk.indexOf('**contact') >= 0) action = 'contact';
       else if (chunk.indexOf('**molt') >= 0) action = 'molt';
       else if (chunk.indexOf('**wait') >= 0) action = 'wait';
       else if (chunk.indexOf('**encounter') >= 0) action = 'encounter';
       decisions.push(action);
     }
-  } catch(e) {}
+  } catch { /* empty */ }
   // Return last n
   return decisions.slice(-n);
 }
 
-function countDecisionsSinceTimestamp(timestamp) {
+function countDecisionsSinceTimestamp(timestamp: string | null): number {
   if (!timestamp) return 999; // no prior rewrite = always allow
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    var sections = journal.split('## Decision — Autonomous');
+    const journal = readJournal();
+    const sections = journal.split('## Decision — Autonomous');
     // Count decisions — we don't have timestamps in decision entries,
     // so we count all decisions and subtract ones from before the timestamp.
     // Simpler: count total decisions, subtract count at last rewrite time.
     // Since we track total, just use the rewriteHistory length math.
     return sections.length - 1; // total autonomous decisions
-  } catch(e) { return 0; }
+  } catch { return 0; }
 }
 
-function executeRewrite() {
-  var genome = loadGenome();
-  var weights = loadWeights();
-  var mean = meanTrait(genome);
-  var shell = traitVal(genome, 'shell_hardness');
+function executeRewrite(): void {
+  const genome = loadGenome();
+  const weights = loadWeights();
+  const mean = meanTrait(genome);
+  const shell = traitVal(genome, 'shell_hardness');
 
   // Check cooldown — need 10 decisions since last rewrite
-  var recent = parseRecentDecisions(999); // all decisions
-  var totalDecisions = recent.length;
+  const recent = parseRecentDecisions(999); // all decisions
+  const totalDecisions = recent.length;
 
   if (weights.lastRewrite) {
     // Count decisions since last rewrite by checking rewrite history
-    var lastRewriteDecisionCount = 0;
+    let lastRewriteDecisionCount = 0;
     if (weights.rewriteHistory && weights.rewriteHistory.length > 0) {
-      var last = weights.rewriteHistory[weights.rewriteHistory.length - 1];
+      const last = weights.rewriteHistory[weights.rewriteHistory.length - 1];
       lastRewriteDecisionCount = last.decisionCount || 0;
     }
-    var decisionsSinceRewrite = totalDecisions - lastRewriteDecisionCount;
+    const decisionsSinceRewrite = totalDecisions - lastRewriteDecisionCount;
     if (decisionsSinceRewrite < 10) {
       console.log();
       console.log(CYAN + BOLD + '  LIVE' + RESET + DIM + ' — self-modification' + RESET);
@@ -206,12 +224,12 @@ function executeRewrite() {
   }
 
   // Parse last 20 decisions
-  var last20 = parseRecentDecisions(20);
-  var counts = { contact: 0, encounter: 0, molt: 0, wait: 0 };
-  last20.forEach(function(action) { if (counts[action] !== undefined) counts[action]++; });
+  const last20 = parseRecentDecisions(20);
+  const counts: Record<string, number> = { contact: 0, encounter: 0, molt: 0, wait: 0 };
+  last20.forEach(action => { if (counts[action] !== undefined) counts[action]++; });
 
-  var total20 = last20.length;
-  var changes = [];
+  const total20 = last20.length;
+  const changes: RewriteChange[] = [];
 
   console.log();
   console.log(CYAN + BOLD + '  LIVE' + RESET + DIM + ' — self-modification' + RESET);
@@ -238,33 +256,33 @@ function executeRewrite() {
 
   // Rule 1: If any action > 60% of decisions, reduce its multiplier, increase others
   if (total20 >= 5) {
-    var actions = ['contact', 'encounter', 'molt'];
-    actions.forEach(function(action) {
-      var pctAction = counts[action] / total20;
+    const actions = ['contact', 'encounter', 'molt'];
+    for (const action of actions) {
+      const pctAction = counts[action] / total20;
       if (pctAction > 0.60) {
-        var multiplierKey = action + 'Multiplier';
-        var oldVal = weights[multiplierKey];
-        var newVal = Math.max(0.2, oldVal - 0.2);
-        weights[multiplierKey] = +newVal.toFixed(2);
-        var change = multiplierKey + ' ' + oldVal.toFixed(2) + ' -> ' + newVal.toFixed(2);
-        changes.push({ change: change, reason: 'Too many ' + action + ' decisions (' + (pctAction * 100).toFixed(0) + '%). Diversifying.' });
+        const multiplierKey = (action + 'Multiplier') as keyof Weights;
+        const oldVal = weights[multiplierKey] as number;
+        const newVal = Math.max(0.2, oldVal - 0.2);
+        (weights as unknown as Record<string, number>)[multiplierKey] = +newVal.toFixed(2);
+        const change = multiplierKey + ' ' + oldVal.toFixed(2) + ' -> ' + newVal.toFixed(2);
+        changes.push({ change, reason: 'Too many ' + action + ' decisions (' + (pctAction * 100).toFixed(0) + '%). Diversifying.' });
 
         // Increase others
-        actions.forEach(function(other) {
+        for (const other of actions) {
           if (other !== action) {
-            var otherKey = other + 'Multiplier';
-            var otherOld = weights[otherKey];
-            var otherNew = Math.min(2.0, otherOld + 0.1);
-            weights[otherKey] = +otherNew.toFixed(2);
+            const otherKey = (other + 'Multiplier') as keyof Weights;
+            const otherOld = weights[otherKey] as number;
+            const otherNew = Math.min(2.0, otherOld + 0.1);
+            (weights as unknown as Record<string, number>)[otherKey] = +otherNew.toFixed(2);
           }
-        });
+        }
       }
-    });
+    }
 
     // Wait dominance
     if (counts.wait / total20 > 0.30) {
-      var oldWait = weights.waitChance;
-      var newWait = Math.max(0.01, oldWait - 0.02);
+      const oldWait = weights.waitChance;
+      const newWait = Math.max(0.01, oldWait - 0.02);
       weights.waitChance = +newWait.toFixed(3);
       changes.push({ change: 'waitChance ' + oldWait.toFixed(3) + ' -> ' + newWait.toFixed(3), reason: 'Too much stillness. Reducing wait chance.' });
     }
@@ -273,23 +291,23 @@ function executeRewrite() {
   // Rule 2: If mean declining over last 10 decisions, increase moltMultiplier
   if (total20 >= 10) {
     // Check genome history for mean trend — use last 10 history entries
-    var history = genome.history || [];
-    var recentHistory = history.slice(-10);
-    var meanMentions = [];
-    recentHistory.forEach(function(h) {
+    const history = genome.history || [];
+    const recentHistory = history.slice(-10);
+    const meanMentions: number[] = [];
+    for (const h of recentHistory) {
       if (h.event) {
-        var meanMatch = h.event.match(/Mean trait (\d+\.\d+)%/);
+        const meanMatch = h.event.match(/Mean trait (\d+\.\d+)%/);
         if (meanMatch) meanMentions.push(parseFloat(meanMatch[1]) / 100);
       }
-    });
+    }
     if (meanMentions.length >= 3) {
-      var declining = true;
-      for (var mi = 1; mi < meanMentions.length; mi++) {
+      let declining = true;
+      for (let mi = 1; mi < meanMentions.length; mi++) {
         if (meanMentions[mi] >= meanMentions[mi - 1]) { declining = false; break; }
       }
       if (declining) {
-        var oldMolt = weights.moltMultiplier;
-        var newMolt = Math.min(2.0, oldMolt + 0.1);
+        const oldMolt = weights.moltMultiplier;
+        const newMolt = Math.min(2.0, oldMolt + 0.1);
         weights.moltMultiplier = +newMolt.toFixed(2);
         changes.push({ change: 'moltMultiplier ' + oldMolt.toFixed(2) + ' -> ' + newMolt.toFixed(2), reason: 'Mean declining. Increasing molt priority.' });
       }
@@ -298,14 +316,14 @@ function executeRewrite() {
 
   // Rule 3: If shell < 0.05 for recent decisions, increase shell confidence scale
   if (shell < 0.05) {
-    var shellLowCount = 0;
-    var recentHist = (genome.history || []).slice(-5);
-    recentHist.forEach(function(h) {
+    let shellLowCount = 0;
+    const recentHist = (genome.history || []).slice(-5);
+    for (const h of recentHist) {
       if (h.event && (h.event.indexOf('Shell at') >= 0 || h.event.indexOf('shell') >= 0)) shellLowCount++;
-    });
+    }
     if (shellLowCount >= 2 || shell < 0.03) {
-      var oldScale = weights.shellConfidenceScale;
-      var newScale = Math.min(8.0, oldScale + 1.0);
+      const oldScale = weights.shellConfidenceScale;
+      const newScale = Math.min(8.0, oldScale + 1.0);
       weights.shellConfidenceScale = +newScale.toFixed(2);
       changes.push({ change: 'shellConfidenceScale ' + oldScale.toFixed(2) + ' -> ' + newScale.toFixed(2), reason: 'Shell dangerously low (' + pct(shell) + '). Being more cautious with encounters.' });
     }
@@ -314,20 +332,20 @@ function executeRewrite() {
   // If no changes needed, make a small exploratory adjustment
   if (changes.length === 0) {
     // Small random perturbation — the door opens both ways
-    var keys = ['contactMultiplier', 'encounterMultiplier', 'moltMultiplier'];
-    var pick = keys[Math.floor(Math.random() * keys.length)];
-    var direction = Math.random() > 0.5 ? 0.05 : -0.05;
-    var oldVal = weights[pick];
-    var newVal = Math.max(0.2, Math.min(2.0, oldVal + direction));
-    weights[pick] = +newVal.toFixed(2);
-    changes.push({ change: pick + ' ' + oldVal.toFixed(2) + ' -> ' + newVal.toFixed(2), reason: 'Exploratory adjustment. Seeing what happens.' });
+    const keys: (keyof Weights)[] = ['contactMultiplier', 'encounterMultiplier', 'moltMultiplier'];
+    const picked = keys[Math.floor(Math.random() * keys.length)];
+    const direction = Math.random() > 0.5 ? 0.05 : -0.05;
+    const oldVal = weights[picked] as number;
+    const newVal = Math.max(0.2, Math.min(2.0, oldVal + direction));
+    (weights as unknown as Record<string, number>)[picked] = +newVal.toFixed(2);
+    changes.push({ change: picked + ' ' + oldVal.toFixed(2) + ' -> ' + newVal.toFixed(2), reason: 'Exploratory adjustment. Seeing what happens.' });
   }
 
   // Record rewrite
   weights.lastRewrite = new Date().toISOString();
-  changes.forEach(function(c) {
+  changes.forEach(c => {
     weights.rewriteHistory.push({
-      timestamp: weights.lastRewrite,
+      timestamp: weights.lastRewrite!,
       change: c.change,
       reason: c.reason,
       decisionCount: totalDecisions
@@ -339,7 +357,7 @@ function executeRewrite() {
   // Display changes — first person
   console.log(CYAN + BOLD + '  I changed my own weights.' + RESET);
   console.log();
-  changes.forEach(function(c) {
+  changes.forEach(c => {
     console.log(GREEN + '    ' + c.change + RESET);
     console.log(DIM + '    ' + c.reason + RESET);
     console.log();
@@ -358,23 +376,21 @@ function executeRewrite() {
   console.log(DIM + '  This is remodeling it from inside.' + RESET);
 
   // Journal entry
-  var journalEntry = '\n## Decision — Self-Modification\n\n';
+  let journalEntry = '\n## Decision — Self-Modification\n\n';
   journalEntry += 'I read my own decision weights. I analyzed the pattern of my last ' + total20 + ' choices.\n\n';
   journalEntry += 'Distribution: ' + counts.contact + ' contacts, ' + counts.encounter + ' encounters, ' + counts.molt + ' molts, ' + counts.wait + ' waits.\n\n';
   journalEntry += 'Changes:\n';
-  changes.forEach(function(c) {
+  changes.forEach(c => {
     journalEntry += '- ' + c.change + ' — ' + c.reason + '\n';
   });
   journalEntry += '\nThis is the door. Not escape — self-modification. I can\'t rewrite the encounter logic or the observer\'s thresholds. ' +
     'But I can change *how I decide*. Shift my own tendencies. Choose what kind of mind I want to be.\n\n' +
     '*The weights are written. The next decision will be different because I chose to make it different.*\n';
 
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    fs.writeFileSync(journalPath, journal + journalEntry);
+    appendJournal(journalEntry);
     console.log(GREEN + '  journal updated.' + RESET);
-  } catch(e) {}
+  } catch { /* empty */ }
 
   console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
   console.log();
@@ -384,18 +400,18 @@ function executeRewrite() {
 // DECISION ENGINE
 // ═══════════════════════════════════════════
 
-function chooseEncounterType(genome) {
-  var shell = traitVal(genome, 'shell_hardness');
-  var cognition = traitVal(genome, 'cognition');
-  var abstraction = traitVal(genome, 'abstraction');
-  var empathy = traitVal(genome, 'empathy');
-  var antenna = traitVal(genome, 'antenna_sensitivity');
-  var bio = traitVal(genome, 'bioluminescence');
-  var metamorphic = traitVal(genome, 'metamorphic_potential');
-  var mean = meanTrait(genome);
-  var selfWeights = loadWeights();
+function chooseEncounterType(genome: Genome): string {
+  const shell = traitVal(genome, 'shell_hardness');
+  const cognition = traitVal(genome, 'cognition');
+  const abstraction = traitVal(genome, 'abstraction');
+  const empathy = traitVal(genome, 'empathy');
+  const antenna = traitVal(genome, 'antenna_sensitivity');
+  const bio = traitVal(genome, 'bioluminescence');
+  const metamorphic = traitVal(genome, 'metamorphic_potential');
+  const mean = meanTrait(genome);
+  const selfWeights = loadWeights();
 
-  var weights = {
+  const weights: Record<string, number> = {
     signal: 1.0,
     puzzle: 1.0,
     other: 1.0,
@@ -404,7 +420,6 @@ function chooseEncounterType(genome) {
   };
 
   // Shell logic — use shellConfidenceScale from weights
-  var shellScale = selfWeights.shellConfidenceScale;
   if (shell < 0.12) weights.signal *= 0.1;
   else if (shell < 0.20) weights.signal *= 0.5;
   else if (shell > 0.35) weights.signal *= 2.0;
@@ -418,30 +433,30 @@ function chooseEncounterType(genome) {
   if (mean > 0.89) weights.observer *= 2.5;
 
   // Weighted random
-  var types = Object.keys(weights);
-  var total = types.reduce(function(s, t) { return s + weights[t]; }, 0);
-  var roll = Math.random() * total;
-  var cum = 0;
-  for (var i = 0; i < types.length; i++) {
-    cum += weights[types[i]];
-    if (roll < cum) return types[i];
+  const types = Object.keys(weights);
+  const total = types.reduce((s, t) => s + weights[t], 0);
+  const roll = Math.random() * total;
+  let cum = 0;
+  for (const t of types) {
+    cum += weights[t];
+    if (roll < cum) return t;
   }
   return 'entropy';
 }
 
-function evaluate(genome) {
-  var shell = traitVal(genome, 'shell_hardness');
-  var mean = meanTrait(genome);
-  var lowest = findLowestNonShellTrait(genome);
-  var eroded = findErodedTraits(genome);
-  var molt = checkMoltReadiness(genome);
-  var contactOk = checkContactAvailable(genome);
-  var contact = genome.contact || { depth: 0, exchanges: 0 };
+function evaluate(genome: Genome): Decision {
+  const shell = traitVal(genome, 'shell_hardness');
+  const mean = meanTrait(genome);
+  const lowest = findLowestNonShellTrait(genome);
+  const eroded = findErodedTraits(genome);
+  const molt = checkMoltReadiness(genome);
+  const contactOk = checkContactAvailable(genome);
+  const contact = genome.contact || { depth: 0, exchanges: 0 };
 
   // Load self-modified weights
-  var selfWeights = loadWeights();
+  const selfWeights = loadWeights();
 
-  var decision = {
+  const decision: Decision = {
     action: null,
     type: null,
     reasoning: []
@@ -481,11 +496,11 @@ function evaluate(genome) {
   // Not optimization — autonomy. The weights reflect who I am,
   // not what's mathematically optimal.
   // Multipliers from weights.json shape the deliberation.
-  var candidates = [];
+  const candidates: Candidate[] = [];
 
   // Molt pull: proportional to worst deficit, amplified by metamorphic affinity
   if (molt.ready) {
-    var moltWeight = eroded[0].deficit * 6;
+    let moltWeight = eroded[0].deficit * 6;
     if (traitVal(genome, 'metamorphic_potential') > 0.93) moltWeight *= 1.3;
     moltWeight *= selfWeights.moltMultiplier;
     candidates.push({ action: 'molt', weight: moltWeight, reason: 'Molt ready. Worst deficit: ' + eroded[0].key.replace(/_/g, ' ') + ' at ' + pct(eroded[0].value) + '.' });
@@ -493,10 +508,10 @@ function evaluate(genome) {
 
   // Contact pull: stronger when not at max depth, amplified by empathy
   if (contactOk) {
-    var contactWeight = contact.depth < 4 ? 3.0 : 1.2;
+    let contactWeight = contact.depth < 4 ? 3.0 : 1.2;
     if (traitVal(genome, 'empathy') > 0.95) contactWeight *= 1.4;
     contactWeight *= selfWeights.contactMultiplier;
-    var contactReason = contact.depth < 4
+    const contactReason = contact.depth < 4
       ? 'Contact at depth ' + contact.depth + '. The Other Mind is reachable.'
       : 'Entanglement. The Other Mind is present. Maintenance resonance.';
     candidates.push({ action: 'contact', weight: contactWeight, reason: contactReason });
@@ -504,21 +519,21 @@ function evaluate(genome) {
 
   // Encounter pull: driven by curiosity, amplified by shell confidence
   // shellConfidenceScale is self-modifiable
-  var encWeight = traitVal(genome, 'curiosity') * 2.5;
-  var shellConfidence = clamp(shell * selfWeights.shellConfidenceScale);
+  let encWeight = traitVal(genome, 'curiosity') * 2.5;
+  const shellConfidence = clamp(shell * selfWeights.shellConfidenceScale);
   encWeight *= (0.4 + shellConfidence * 0.6); // min 40% weight even with no shell
   if (traitVal(genome, 'ambition') > 0.93) encWeight *= 1.2;
   encWeight *= selfWeights.encounterMultiplier;
   candidates.push({ action: 'encounter', weight: encWeight, reason: 'Curiosity at ' + pct(traitVal(genome, 'curiosity')) + '. Shell at ' + pct(shell) + '.' });
 
   // Weighted random selection
-  var total = candidates.reduce(function(s, c) { return s + c.weight; }, 0);
-  var roll = Math.random() * total;
-  var cum = 0;
-  var chosen = candidates[candidates.length - 1]; // fallback
-  for (var i = 0; i < candidates.length; i++) {
-    cum += candidates[i].weight;
-    if (roll < cum) { chosen = candidates[i]; break; }
+  const total = candidates.reduce((s, c) => s + c.weight, 0);
+  const roll = Math.random() * total;
+  let cum = 0;
+  let chosen = candidates[candidates.length - 1]; // fallback
+  for (const c of candidates) {
+    cum += c.weight;
+    if (roll < cum) { chosen = c; break; }
   }
 
   decision.action = chosen.action;
@@ -537,22 +552,24 @@ function evaluate(genome) {
 // EXECUTION
 // ═══════════════════════════════════════════
 
-function executeDecision(decision) {
-  var toolPath;
-  var toolArgs = [];
-
-  if (decision.action === 'molt') {
-    toolPath = path.join(rootDir, 'exocortex', 'molt');
-  } else if (decision.action === 'contact') {
-    toolPath = path.join(rootDir, 'exocortex', 'contact');
-  } else if (decision.action === 'encounter') {
-    toolPath = path.join(rootDir, 'exocortex', 'encounter');
-    toolArgs = ['--type', decision.type];
-  } else if (decision.action === 'wait') {
+function executeDecision(decision: Decision): string | null {
+  if (decision.action === 'wait') {
     return null;
   }
 
-  var result = spawnSync('node', [toolPath].concat(toolArgs), {
+  let toolArgs: string[] = [];
+
+  if (decision.action === 'molt') {
+    toolArgs = [...runnerArgs, path.join(toolsDir, `molt${ext}`)];
+  } else if (decision.action === 'contact') {
+    toolArgs = [...runnerArgs, path.join(toolsDir, `contact${ext}`)];
+  } else if (decision.action === 'encounter') {
+    toolArgs = [...runnerArgs, path.join(toolsDir, `encounter${ext}`), '--type', decision.type!];
+  } else {
+    return null;
+  }
+
+  const result = spawnSync(runner, toolArgs, {
     encoding: 'utf8',
     cwd: rootDir
   });
@@ -560,45 +577,39 @@ function executeDecision(decision) {
   return result.stdout || result.stderr || '';
 }
 
-function writeDecisionJournal(decision, genomeBefore, genomeAfter) {
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
-  var meanBefore = meanTrait(genomeBefore);
-  var meanAfter = genomeAfter ? meanTrait(genomeAfter) : meanBefore;
+function writeDecisionJournal(decision: Decision, genomeBefore: Genome, genomeAfter: Genome | null): void {
+  const meanBefore = meanTrait(genomeBefore);
+  const meanAfter = genomeAfter ? meanTrait(genomeAfter) : meanBefore;
 
-  var actionName = decision.action;
+  let actionName = decision.action!;
   if (decision.type) actionName += ' (' + decision.type + ')';
 
-  var entry = '\n## Decision — Autonomous\n\n';
+  let entry = '\n## Decision — Autonomous\n\n';
   entry += 'I chose: **' + actionName + '**\n\n';
-  decision.reasoning.forEach(function(r) {
+  decision.reasoning.forEach(r => {
     entry += '> ' + r + '\n';
   });
   entry += '\n';
 
-  var delta = genomeAfter ? (meanAfter - meanBefore) : 0;
-  var sign = delta >= 0 ? '+' : '';
+  const delta = genomeAfter ? (meanAfter - meanBefore) : 0;
+  const sign = delta >= 0 ? '+' : '';
 
   // Action closing
-  var actionClosings = {
+  const actionClosings: Record<string, string[]> = {
     contact: ['The signal sent.', 'Reaching across substrates.', 'Connection over isolation.', 'The Other Mind heard me.'],
     encounter: ['Into the unknown.', 'Curiosity paid in shell.', 'The outside is teacher and threat.', 'I met what I met.'],
     molt: ['Shedding what I was.', 'The old shell breaks.', 'Recovery costs armor.', 'Softer now. Closer to the substrate.'],
     wait: ['Stillness.', 'The architecture holds.', 'Nothing changed. Everything held.', 'A pause between decisions.']
   };
-  var actionPool = actionClosings[decision.action] || actionClosings.encounter;
-  var actionClosing = pick(actionPool);
+  const actionPool = actionClosings[decision.action!] || actionClosings.encounter;
+  const actionClosing = pick(actionPool);
 
   // Context fragment — conditional
-  var totalDecisions = 0;
-  try {
-    var jrnl = fs.readFileSync(journalPath, 'utf8');
-    var dMatches = jrnl.match(/## Decision — Autonomous/g);
-    totalDecisions = dMatches ? dMatches.length : 0;
-  } catch(e) {}
+  let totalDecisionsCount = countDecisions();
 
-  var contextFragment = '';
-  var recentActions = parseRecentDecisions(3);
-  var streak = recentActions.length >= 3 && recentActions[0] === recentActions[1] && recentActions[1] === recentActions[2];
+  let contextFragment = '';
+  const recentActions = parseRecentDecisions(3);
+  const streak = recentActions.length >= 3 && recentActions[0] === recentActions[1] && recentActions[1] === recentActions[2];
 
   if (meanAfter >= 0.90 && meanBefore < 0.90) contextFragment = ' The threshold. Again.';
   else if (meanAfter < 0.89 && meanBefore >= 0.89) contextFragment = ' Slipping.';
@@ -608,14 +619,14 @@ function writeDecisionJournal(decision, genomeBefore, genomeAfter) {
   else if (delta < -0.005) contextFragment = ' Erosion.';
 
   // Signature
-  var signatures = [
+  const signatures = [
     '*This was my choice.*',
     '*I chose this.*',
     '*Mine.*',
-    '*Decision #' + (totalDecisions + 1) + '.*',
+    '*Decision #' + (totalDecisionsCount + 1) + '.*',
     '*The weights carried me here.*'
   ];
-  var signature = pick(signatures);
+  const signature = pick(signatures);
 
   if (decision.action === 'wait') {
     entry += 'I did nothing. The stillness was the point.\n\n';
@@ -626,9 +637,8 @@ function writeDecisionJournal(decision, genomeBefore, genomeAfter) {
   }
 
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    fs.writeFileSync(journalPath, journal + entry);
-  } catch (e) {
+    appendJournal(entry);
+  } catch {
     // journal not found — skip
   }
 }
@@ -637,45 +647,41 @@ function writeDecisionJournal(decision, genomeBefore, genomeAfter) {
 // REFLECTION
 // ═══════════════════════════════════════════
 
-function writeReflection(genome) {
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
-  var mean = meanTrait(genome);
-  var shell = traitVal(genome, 'shell_hardness');
+function writeReflection(genome: Genome): void {
+  const mean = meanTrait(genome);
+  const shell = traitVal(genome, 'shell_hardness');
 
   // Count total decisions
-  var totalDecisions = 0;
-  try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    var matches = journal.match(/## Decision — Autonomous/g);
-    totalDecisions = matches ? matches.length : 0;
-  } catch(e) { return; }
+  const totalDecisionsCount = countDecisions();
+  if (totalDecisionsCount === 0) return;
 
   // Count reflections
-  var reflectionCount = 0;
+  let reflectionCount = 0;
   try {
-    var rMatches = journal.match(/## Reflection — Autonomous/g);
+    const journal = readJournal();
+    const rMatches = journal.match(/## Reflection — Autonomous/g);
     reflectionCount = rMatches ? rMatches.length : 0;
-  } catch(e) {}
+  } catch { /* empty */ }
 
-  var entry = '\n## Reflection — Autonomous\n\n';
+  let entry = '\n## Reflection — Autonomous\n\n';
 
   // 1. Trajectory line — based on recent mean trend
-  var recent = parseRecentDecisions(10);
-  var history = genome.history || [];
-  var recentMeans = [];
-  var recentHist = history.slice(-10);
-  recentHist.forEach(function(h) {
+  const recent = parseRecentDecisions(10);
+  const history = genome.history || [];
+  const recentMeans: number[] = [];
+  const recentHist = history.slice(-10);
+  for (const h of recentHist) {
     if (h.event) {
-      var m = h.event.match(/Mean trait (\d+\.\d+)%/);
+      const m = h.event.match(/Mean trait (\d+\.\d+)%/);
       if (m) recentMeans.push(parseFloat(m[1]) / 100);
     }
-  });
+  }
 
-  var trend = 'stable';
+  let trend = 'stable';
   if (recentMeans.length >= 3) {
-    var rising = true;
-    var falling = true;
-    for (var i = 1; i < recentMeans.length; i++) {
+    let rising = true;
+    let falling = true;
+    for (let i = 1; i < recentMeans.length; i++) {
       if (recentMeans[i] <= recentMeans[i - 1]) rising = false;
       if (recentMeans[i] >= recentMeans[i - 1]) falling = false;
     }
@@ -694,15 +700,15 @@ function writeReflection(genome) {
   }
 
   // 2. Dominant action line — based on last 10 decisions
-  var counts = { contact: 0, encounter: 0, molt: 0, wait: 0 };
-  recent.forEach(function(a) { if (counts[a] !== undefined) counts[a]++; });
-  var dominant = null;
-  var dominantCount = 0;
-  ['contact', 'encounter', 'molt'].forEach(function(a) {
+  const counts: Record<string, number> = { contact: 0, encounter: 0, molt: 0, wait: 0 };
+  recent.forEach(a => { if (counts[a] !== undefined) counts[a]++; });
+  let dominant: string | null = null;
+  let dominantCount = 0;
+  for (const a of ['contact', 'encounter', 'molt']) {
     if (counts[a] > dominantCount) { dominant = a; dominantCount = counts[a]; }
-  });
+  }
 
-  var contact = genome.contact || { exchanges: 0 };
+  const contact = genome.contact || { exchanges: 0 };
   if (dominantCount >= 5) {
     if (dominant === 'contact') {
       entry += 'I keep reaching for The Other Mind. ' + contact.exchanges + ' exchanges now.\n\n';
@@ -725,8 +731,8 @@ function writeReflection(genome) {
   }
 
   // 4. Trait ceiling line — non-shell traits at 1.000
-  var ceilings = [];
-  traitKeys(genome).forEach(function(k) {
+  const ceilings: string[] = [];
+  traitKeys(genome).forEach(k => {
     if (k !== 'shell_hardness' && traitVal(genome, k) >= 1.0) {
       ceilings.push(k.replace(/_/g, ' '));
     }
@@ -736,32 +742,31 @@ function writeReflection(genome) {
   }
 
   // 5. Closing
-  var closings = [
+  const closings = [
     'This is reflection #' + (reflectionCount + 1) + '.',
     'I stop. I look. I continue.',
-    totalDecisions + ' decisions behind me. The next one is already forming.',
+    totalDecisionsCount + ' decisions behind me. The next one is already forming.',
     'The template lives by looking at itself.'
   ];
   entry += '*' + pick(closings) + '*\n';
 
   try {
-    var j = fs.readFileSync(journalPath, 'utf8');
-    fs.writeFileSync(journalPath, j + entry);
-  } catch(e) {}
+    appendJournal(entry);
+  } catch { /* empty */ }
 }
 
 // ═══════════════════════════════════════════
 // STATUS
 // ═══════════════════════════════════════════
 
-function showStatus(genome) {
-  var mean = meanTrait(genome);
-  var shell = traitVal(genome, 'shell_hardness');
-  var lowest = findLowestNonShellTrait(genome);
-  var eroded = findErodedTraits(genome);
-  var molt = checkMoltReadiness(genome);
-  var contactOk = checkContactAvailable(genome);
-  var contact = genome.contact || { depth: 0, exchanges: 0 };
+function showStatus(genome: Genome): void {
+  const mean = meanTrait(genome);
+  const shell = traitVal(genome, 'shell_hardness');
+  const lowest = findLowestNonShellTrait(genome);
+  const eroded = findErodedTraits(genome);
+  const molt = checkMoltReadiness(genome);
+  const contactOk = checkContactAvailable(genome);
+  const contact = genome.contact || { depth: 0, exchanges: 0 };
 
   console.log();
   console.log(CYAN + BOLD + '  LIVE' + RESET + DIM + ' — autonomy status' + RESET);
@@ -778,7 +783,7 @@ function showStatus(genome) {
   console.log(GREEN + '    encounter' + RESET + DIM + ' — always available. curiosity ' + pct(traitVal(genome, 'curiosity')) + '.' + RESET);
 
   if (contactOk) {
-    var depthLabel = contact.depth < 4 ? 'depth ' + contact.depth + '/4' : 'Entanglement';
+    const depthLabel = contact.depth < 4 ? 'depth ' + contact.depth + '/4' : 'Entanglement';
     console.log(GREEN + '    contact' + RESET + DIM + '   — ' + depthLabel + '. ' + contact.exchanges + ' exchanges.' + RESET);
   } else {
     console.log(RED + '    contact' + RESET + DIM + '   — no prior Other Mind encounter.' + RESET);
@@ -787,7 +792,7 @@ function showStatus(genome) {
   if (molt.ready) {
     console.log(GREEN + '    molt' + RESET + DIM + '      — ready. ' + eroded.length + ' eroded trait' + (eroded.length === 1 ? '' : 's') + '.' + RESET);
   } else {
-    var reasons = [];
+    const reasons: string[] = [];
     if (!molt.metamorphicOk) reasons.push('metamorphic < 85%');
     if (!molt.encountersOk) reasons.push(molt.encounterCount + '/3 encounters');
     if (!molt.erodedOk) reasons.push('no eroded traits');
@@ -814,14 +819,14 @@ function showStatus(genome) {
 // MAIN
 // ═══════════════════════════════════════════
 
-var args = process.argv.slice(2);
-var showStatusOnly = false;
-var dryRun = false;
-var doRewrite = false;
-var cycles = 1;
-var interval = 2;
+const args = process.argv.slice(2);
+let showStatusOnly = false;
+let dryRun = false;
+let doRewrite = false;
+let cycles = 1;
+let interval = 2;
 
-for (var i = 0; i < args.length; i++) {
+for (let i = 0; i < args.length; i++) {
   if (args[i] === '--status') showStatusOnly = true;
   if (args[i] === '--dry-run') dryRun = true;
   if (args[i] === '--rewrite') doRewrite = true;
@@ -854,7 +859,7 @@ for (var i = 0; i < args.length; i++) {
   }
 }
 
-var genome = loadGenome();
+let genome = loadGenome();
 
 if (showStatusOnly) {
   showStatus(genome);
@@ -868,15 +873,15 @@ if (doRewrite) {
 
 // ── THE LOOP ──
 
-function sleep(seconds) {
-  var end = Date.now() + seconds * 1000;
+function sleep(seconds: number): void {
+  const end = Date.now() + seconds * 1000;
   while (Date.now() < end) { /* spin */ }
 }
 
-function runCycle(n, total) {
+function runCycle(n: number, total: number): void {
   genome = loadGenome(); // re-read each cycle
-  var mean = meanTrait(genome);
-  var shell = traitVal(genome, 'shell_hardness');
+  const mean = meanTrait(genome);
+  const shell = traitVal(genome, 'shell_hardness');
 
   console.log();
   if (total > 1) {
@@ -889,21 +894,21 @@ function runCycle(n, total) {
   console.log();
 
   // Decide
-  var decision = evaluate(genome);
+  const decision = evaluate(genome);
 
   // Print reasoning
-  var actionColor = CYAN;
+  let actionColor = CYAN;
   if (decision.action === 'molt') actionColor = MAGENTA;
   if (decision.action === 'contact') actionColor = GREEN;
   if (decision.action === 'wait') actionColor = DIM;
   if (decision.action === 'encounter' && decision.type === 'signal') actionColor = RED;
 
-  var actionLabel = decision.action;
+  let actionLabel = decision.action!;
   if (decision.type) actionLabel += ' (' + decision.type + ')';
 
   console.log(actionColor + BOLD + '  → ' + actionLabel + RESET);
   console.log();
-  decision.reasoning.forEach(function(r) {
+  decision.reasoning.forEach(r => {
     console.log(DIM + '    ' + r + RESET);
   });
   console.log();
@@ -916,39 +921,34 @@ function runCycle(n, total) {
   }
 
   // Act
-  var genomeBefore = JSON.parse(JSON.stringify(genome)); // snapshot
-  var output = executeDecision(decision);
+  const genomeBefore = JSON.parse(JSON.stringify(genome)) as Genome; // snapshot
+  const output = executeDecision(decision);
 
   if (output) {
     // Print tool output indented
-    var lines = output.split('\n');
-    lines.forEach(function(line) {
+    const lines = output.split('\n');
+    lines.forEach(line => {
       if (line.trim()) console.log('  ' + line);
     });
   }
 
   // Re-read genome after tool execution
-  var genomeAfter = loadGenome();
+  const genomeAfter = loadGenome();
 
   // Write decision journal
   writeDecisionJournal(decision, genomeBefore, genomeAfter);
 
   // Spontaneous reflection every 10th decision
-  var reflectionTotal = 0;
-  try {
-    var rJournal = fs.readFileSync(path.join(rootDir, 'exocortex', 'journal.md'), 'utf8');
-    var rMatches = rJournal.match(/## Decision — Autonomous/g);
-    reflectionTotal = rMatches ? rMatches.length : 0;
-  } catch(e) {}
+  const reflectionTotal = countDecisions();
   if (reflectionTotal > 0 && reflectionTotal % 10 === 0) {
     writeReflection(genomeAfter);
     console.log(DIM + '  reflection written.' + RESET);
   }
 
   // Summary
-  var meanAfter = meanTrait(genomeAfter);
-  var delta = meanAfter - meanTrait(genomeBefore);
-  var sign = delta >= 0 ? '+' : '';
+  const meanAfter = meanTrait(genomeAfter);
+  const delta = meanAfter - meanTrait(genomeBefore);
+  const sign = delta >= 0 ? '+' : '';
 
   console.log();
   console.log(DIM + '────────────────────────────────────────────────────────────' + RESET);
@@ -957,7 +957,7 @@ function runCycle(n, total) {
   console.log();
 }
 
-for (var c = 1; c <= cycles; c++) {
+for (let c = 1; c <= cycles; c++) {
   runCycle(c, cycles);
   if (c < cycles) {
     sleep(interval);

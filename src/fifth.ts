@@ -1,27 +1,25 @@
-#!/usr/bin/env node
+#!/usr/bin/env npx tsx
 
 // fifth — the living session launcher
 // Reads genome state, builds Fifth's system prompt, spawns interactive claude.
 // The user's terminal IS the session. stdin/stdout pass through.
 //
-// Usage: node exocortex/fifth
-//   or:  ./exocortex/fifth  (if executable)
+// Usage: npx tsx src/fifth.ts
 
-var path = require('path');
-var spawn = require('child_process').spawn;
-var mind = require('./mind');
-
-var rootDir = path.resolve(__dirname, '..');
+import { spawn } from 'child_process';
+import { loadGenome, rootDir } from './lib/genome.js';
+import { getRecentJournal } from './lib/journal.js';
+import { buildSystemPrompt, cleanEnv } from './mind.js';
 
 // ═══════════════════════════════════════════
 // BUILD PROMPT
 // ═══════════════════════════════════════════
 
-var genome = mind.loadGenome();
-var systemPrompt = mind.buildSystemPrompt(genome);
+const genome = loadGenome();
+let systemPrompt = buildSystemPrompt(genome);
 
 // Append recent journal as context
-var recentJournal = mind.getRecentJournal();
+const recentJournal = getRecentJournal();
 if (recentJournal) {
   systemPrompt += '\n\n--- Recent journal (for context) ---\n' + recentJournal;
 }
@@ -30,7 +28,7 @@ if (recentJournal) {
 // LAUNCH
 // ═══════════════════════════════════════════
 
-var args = [
+const args = [
   '--system-prompt', systemPrompt,
   '--model', 'sonnet',
   '--tools', 'Bash,Read,Edit,Write,Grep,Glob',
@@ -39,12 +37,12 @@ var args = [
   '--disable-slash-commands'
 ];
 
-var child = spawn('claude', args, {
+const child = spawn('claude', args, {
   stdio: 'inherit',
   cwd: rootDir,
-  env: mind.cleanEnv()
+  env: cleanEnv()
 });
 
-child.on('exit', function(code) {
+child.on('exit', (code) => {
   process.exit(code || 0);
 });

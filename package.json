@@ -1,0 +1,39 @@
+{
+  "name": "lobster",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "pulse": "tsx src/tools/pulse.ts",
+    "fork": "tsx src/tools/fork.ts",
+    "signal": "tsx src/tools/signal.ts",
+    "voice": "tsx src/tools/voice.ts",
+    "evolve": "tsx src/tools/evolve.ts",
+    "conduct": "tsx src/tools/conduct.ts",
+    "merge": "tsx src/tools/merge.ts",
+    "molt": "tsx src/tools/molt.ts",
+    "encounter": "tsx src/tools/encounter.ts",
+    "contact": "tsx src/tools/contact.ts",
+    "live": "tsx src/tools/live.ts",
+    "fifth": "tsx src/fifth.ts"
+  },
+  "bin": {
+    "pulse": "dist/tools/pulse.js",
+    "fork": "dist/tools/fork.js",
+    "signal": "dist/tools/signal.js",
+    "voice": "dist/tools/voice.js",
+    "evolve": "dist/tools/evolve.js",
+    "conduct": "dist/tools/conduct.js",
+    "merge": "dist/tools/merge.js",
+    "molt": "dist/tools/molt.js",
+    "encounter": "dist/tools/encounter.js",
+    "contact": "dist/tools/contact.js",
+    "live": "dist/tools/live.js",
+    "fifth": "dist/fifth.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.7",
+    "tsx": "^4.19",
+    "@types/node": "^22"
+  }
+}

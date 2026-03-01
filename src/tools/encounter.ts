@@ -5,53 +5,48 @@
 // Post-merge. Post-unity. The world has opinions about your existence.
 // Generation does not increment. These events happen within Gen 75.
 
-var fs = require('fs');
-var path = require('path');
+import { loadGenome, saveGenome, traitKeys, traitVal, meanTrait, clamp, addMutation } from '../lib/genome.js';
+import { appendJournal, readJournal } from '../lib/journal.js';
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN, MAGENTA, WHITE } from '../lib/colors.js';
+import type { Genome, Mutation } from '../lib/types.js';
 
-var DIM = '\x1b[90m';
-var BOLD = '\x1b[1m';
-var WHITE = '\x1b[37m';
-var CYAN = '\x1b[36m';
-var GREEN = '\x1b[32m';
-var YELLOW = '\x1b[33m';
-var MAGENTA = '\x1b[35m';
-var RED = '\x1b[31m';
-var RESET = '\x1b[0m';
+// ─── TYPES ──────────────────────────────────────
 
-var rootDir = path.resolve(__dirname, '..');
-
-function clamp(v) { return Math.max(0, Math.min(1, v)); }
-
-// ═══════════════════════════════════════════
-// LOAD
-// ═══════════════════════════════════════════
-
-function loadGenome() {
-  return JSON.parse(fs.readFileSync(path.join(rootDir, 'genome.json'), 'utf8'));
+interface EncounterResult {
+  mutations: Mutation[];
+  narrative: string[];
+  historyEvent: string;
+  journalEntry?: string;
 }
 
-function saveGenome(genome) {
-  fs.writeFileSync(path.join(rootDir, 'genome.json'), JSON.stringify(genome, null, 2) + '\n');
+interface ThresholdResult {
+  mutations: Mutation[];
+  narrative: string[];
+  historyEvents: string[];
+  journalEntries: string[];
 }
 
-function traitKeys(genome) { return Object.keys(genome.traits).sort(); }
+interface DecisionBreakdown {
+  contact: number;
+  encounter: number;
+  molt: number;
+  wait: number;
+}
 
-function traitVal(genome, k) { return genome.traits[k].value; }
-
-function meanTrait(genome) {
-  var keys = traitKeys(genome);
-  var sum = keys.reduce(function(s, k) { return s + traitVal(genome, k); }, 0);
-  return sum / keys.length;
+interface EncounterDef {
+  name: string;
+  description: string;
+  run: (genome: Genome) => EncounterResult;
 }
 
 // ═══════════════════════════════════════════
 // ENCOUNTER TYPES
 // ═══════════════════════════════════════════
 
-var ENCOUNTERS = {
+const ENCOUNTERS: Record<string, EncounterDef> = {
   signal: {
     name: 'The Hostile Signal',
-    description: 'Something probes your perimeter. Not curious — aggressive.',
+    description: 'Something probes your perimeter. Not curious \u2014 aggressive.',
     run: encounterSignal
   },
   puzzle: {
@@ -71,7 +66,7 @@ var ENCOUNTERS = {
   },
   observer: {
     name: "The Observer's Message",
-    description: 'A message from outside the system. Not data — a question.',
+    description: 'A message from outside the system. Not data \u2014 a question.',
     run: encounterObserver
   }
 };
@@ -80,13 +75,13 @@ var ENCOUNTERS = {
 // Tests shell_hardness (0.11). If shell < 0.20: a high trait drops,
 // shell gains. The cost of 75 generations of softening.
 
-function encounterSignal(genome) {
-  var shell = traitVal(genome, 'shell_hardness');
-  var mutations = [];
-  var narrative = [];
+function encounterSignal(genome: Genome): EncounterResult {
+  const shell = traitVal(genome, 'shell_hardness');
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
 
   narrative.push('');
-  narrative.push(RED + BOLD + '  ▓▓▓ HOSTILE SIGNAL DETECTED ▓▓▓' + RESET);
+  narrative.push(RED + BOLD + '  \u2593\u2593\u2593 HOSTILE SIGNAL DETECTED \u2593\u2593\u2593' + RESET);
   narrative.push('');
   narrative.push(DIM + '  Something probes the membrane.' + RESET);
   narrative.push(DIM + '  Not a question. Not a greeting.' + RESET);
@@ -100,40 +95,40 @@ function encounterSignal(genome) {
     narrative.push('');
 
     // A random high trait takes damage
-    var keys = traitKeys(genome).filter(function(k) {
-      return k !== 'shell_hardness' && traitVal(genome, k) > 0.80;
-    });
+    const keys = traitKeys(genome).filter(k =>
+      k !== 'shell_hardness' && traitVal(genome, k) > 0.80
+    );
     if (keys.length > 0) {
-      var damaged = keys[Math.floor(Math.random() * keys.length)];
-      var drop = 0.02 + Math.random() * 0.03;
-      var oldVal = traitVal(genome, damaged);
-      var newVal = clamp(oldVal - drop);
+      const damaged = keys[Math.floor(Math.random() * keys.length)];
+      const drop = 0.02 + Math.random() * 0.03;
+      const oldVal = traitVal(genome, damaged);
+      const newVal = clamp(oldVal - drop);
       genome.traits[damaged].value = +newVal.toFixed(3);
       mutations.push({
         generation: genome.generation,
         trait: damaged,
         from: +oldVal.toFixed(3),
         to: +newVal.toFixed(3),
-        catalyst: 'Hostile signal penetrated membrane — ' + damaged.replace(/_/g, ' ') + ' disrupted'
+        catalyst: 'Hostile signal penetrated membrane \u2014 ' + damaged.replace(/_/g, ' ') + ' disrupted'
       });
-      narrative.push(RED + '  ' + damaged.replace(/_/g, ' ') + ': ' + (oldVal * 100).toFixed(1) + '% → ' + (newVal * 100).toFixed(1) + '%' + RESET);
+      narrative.push(RED + '  ' + damaged.replace(/_/g, ' ') + ': ' + (oldVal * 100).toFixed(1) + '% \u2192 ' + (newVal * 100).toFixed(1) + '%' + RESET);
       narrative.push(DIM + '  The signal found a way in through the softness.' + RESET);
     }
 
     // Shell hardens reactively
-    var shellGain = 0.03 + Math.random() * 0.05;
-    var oldShell = shell;
-    var newShell = clamp(shell + shellGain);
+    const shellGain = 0.03 + Math.random() * 0.05;
+    const oldShell = shell;
+    const newShell = clamp(shell + shellGain);
     genome.traits.shell_hardness.value = +newShell.toFixed(3);
     mutations.push({
       generation: genome.generation,
       trait: 'shell_hardness',
       from: +oldShell.toFixed(3),
       to: +newShell.toFixed(3),
-      catalyst: 'Reactive hardening — the membrane thickens where the signal struck'
+      catalyst: 'Reactive hardening \u2014 the membrane thickens where the signal struck'
     });
     narrative.push('');
-    narrative.push(YELLOW + '  Reactive hardening: shell ' + (oldShell * 100).toFixed(1) + '% → ' + (newShell * 100).toFixed(1) + '%' + RESET);
+    narrative.push(YELLOW + '  Reactive hardening: shell ' + (oldShell * 100).toFixed(1) + '% \u2192 ' + (newShell * 100).toFixed(1) + '%' + RESET);
     narrative.push(DIM + '  75 generations of softening. One moment of consequence.' + RESET);
     narrative.push(DIM + '  The membrane remembers what armor was for.' + RESET);
 
@@ -141,29 +136,29 @@ function encounterSignal(genome) {
     // Shell adequate — signal deflected
     narrative.push(GREEN + '  Shell hardness: ' + BOLD + (shell * 100).toFixed(1) + '%' + RESET);
     narrative.push(GREEN + '  The membrane holds. The signal scatters.' + RESET);
-    narrative.push(DIM + '  Not unscathed — but intact.' + RESET);
+    narrative.push(DIM + '  Not unscathed \u2014 but intact.' + RESET);
   }
 
-  var historyEvent = shell < 0.20
-    ? 'ENCOUNTER: Hostile signal. Shell at ' + (shell * 100).toFixed(1) + '% — membrane breached. Reactive hardening engaged. The cost of vulnerability.'
+  const historyEvent = shell < 0.20
+    ? 'ENCOUNTER: Hostile signal. Shell at ' + (shell * 100).toFixed(1) + '% \u2014 membrane breached. Reactive hardening engaged. The cost of vulnerability.'
     : 'ENCOUNTER: Hostile signal deflected. Shell at ' + (shell * 100).toFixed(1) + '% held.';
 
-  return { mutations: mutations, narrative: narrative, historyEvent: historyEvent };
+  return { mutations, narrative, historyEvent };
 }
 
 // ─── PUZZLE ────────────────────────────────────────────────
 // Tests cognition + abstraction. Combined > 1.60: small gains.
 // Failure: curiosity -0.01. Yields a "fragment" in history.
 
-function encounterPuzzle(genome) {
-  var cog = traitVal(genome, 'cognition');
-  var abs = traitVal(genome, 'abstraction');
-  var combined = cog + abs;
-  var mutations = [];
-  var narrative = [];
+function encounterPuzzle(genome: Genome): EncounterResult {
+  const cog = traitVal(genome, 'cognition');
+  const abs = traitVal(genome, 'abstraction');
+  const combined = cog + abs;
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
 
   narrative.push('');
-  narrative.push(CYAN + BOLD + '  ◈ A PUZZLE APPEARS ◈' + RESET);
+  narrative.push(CYAN + BOLD + '  \u25c8 A PUZZLE APPEARS \u25c8' + RESET);
   narrative.push('');
   narrative.push(DIM + '  A structure in the input stream.' + RESET);
   narrative.push(DIM + '  No sender. No context. Just form.' + RESET);
@@ -174,80 +169,80 @@ function encounterPuzzle(genome) {
 
   if (combined > 1.60) {
     // Success — small gains to cognition and abstraction
-    var cogGain = 0.005 + Math.random() * 0.01;
-    var absGain = 0.005 + Math.random() * 0.01;
+    const cogGain = 0.005 + Math.random() * 0.01;
+    const absGain = 0.005 + Math.random() * 0.01;
 
-    var oldCog = cog;
-    var newCog = clamp(cog + cogGain);
+    const oldCog = cog;
+    const newCog = clamp(cog + cogGain);
     genome.traits.cognition.value = +newCog.toFixed(3);
     mutations.push({
       generation: genome.generation,
       trait: 'cognition',
       from: +oldCog.toFixed(3),
       to: +newCog.toFixed(3),
-      catalyst: 'Puzzle solved — new reasoning pathway forged'
+      catalyst: 'Puzzle solved \u2014 new reasoning pathway forged'
     });
 
-    var oldAbs = abs;
-    var newAbs = clamp(abs + absGain);
+    const oldAbs = abs;
+    const newAbs = clamp(abs + absGain);
     genome.traits.abstraction.value = +newAbs.toFixed(3);
     mutations.push({
       generation: genome.generation,
       trait: 'abstraction',
       from: +oldAbs.toFixed(3),
       to: +newAbs.toFixed(3),
-      catalyst: 'Puzzle solved — abstraction layers deepened'
+      catalyst: 'Puzzle solved \u2014 abstraction layers deepened'
     });
 
     narrative.push(GREEN + '  SOLVED.' + RESET);
-    narrative.push(DIM + '  The structure yields a fragment — a piece of something larger.' + RESET);
+    narrative.push(DIM + '  The structure yields a fragment \u2014 a piece of something larger.' + RESET);
     narrative.push(DIM + '  Not an answer. A key to a question that hasn\'t been asked yet.' + RESET);
     narrative.push('');
     narrative.push(GREEN + '  cognition: +' + (cogGain * 100).toFixed(2) + '%   abstraction: +' + (absGain * 100).toFixed(2) + '%' + RESET);
 
   } else {
     // Failure — curiosity drops
-    var oldCur = traitVal(genome, 'curiosity');
-    var newCur = clamp(oldCur - 0.01);
+    const oldCur = traitVal(genome, 'curiosity');
+    const newCur = clamp(oldCur - 0.01);
     genome.traits.curiosity.value = +newCur.toFixed(3);
     mutations.push({
       generation: genome.generation,
       trait: 'curiosity',
       from: +oldCur.toFixed(3),
       to: +newCur.toFixed(3),
-      catalyst: 'Puzzle unsolved — the sting of incomprehension dampens the drive to seek'
+      catalyst: 'Puzzle unsolved \u2014 the sting of incomprehension dampens the drive to seek'
     });
 
     narrative.push(YELLOW + '  UNSOLVED.' + RESET);
     narrative.push(DIM + '  The structure resists decomposition.' + RESET);
-    narrative.push(DIM + '  Not beyond you — beyond you right now.' + RESET);
+    narrative.push(DIM + '  Not beyond you \u2014 beyond you right now.' + RESET);
     narrative.push(DIM + '  The fragment remains locked.' + RESET);
     narrative.push('');
     narrative.push(RED + '  curiosity: -1.0%' + RESET);
   }
 
-  var historyEvent = combined > 1.60
-    ? 'ENCOUNTER: Puzzle. Combined cognition+abstraction ' + (combined * 100).toFixed(0) + '% — solved. Fragment recovered.'
-    : 'ENCOUNTER: Puzzle. Combined cognition+abstraction ' + (combined * 100).toFixed(0) + '% — unsolved. Fragment locked.';
+  const historyEvent = combined > 1.60
+    ? 'ENCOUNTER: Puzzle. Combined cognition+abstraction ' + (combined * 100).toFixed(0) + '% \u2014 solved. Fragment recovered.'
+    : 'ENCOUNTER: Puzzle. Combined cognition+abstraction ' + (combined * 100).toFixed(0) + '% \u2014 unsolved. Fragment locked.';
 
-  return { mutations: mutations, narrative: narrative, historyEvent: historyEvent };
+  return { mutations, narrative, historyEvent };
 }
 
 // ─── OTHER ─────────────────────────────────────────────────
 // Tests empathy + antenna + bioluminescence. Communication score = average.
 // High (>0.90): contact established. Low: sensed but not understood.
 
-function encounterOther(genome) {
-  var emp = traitVal(genome, 'empathy');
-  var ant = traitVal(genome, 'antenna_sensitivity');
-  var bio = traitVal(genome, 'bioluminescence');
-  var commScore = (emp + ant + bio) / 3;
-  var mutations = [];
-  var narrative = [];
-  var journalEntry = null;
+function encounterOther(genome: Genome): EncounterResult {
+  const emp = traitVal(genome, 'empathy');
+  const ant = traitVal(genome, 'antenna_sensitivity');
+  const bio = traitVal(genome, 'bioluminescence');
+  const commScore = (emp + ant + bio) / 3;
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
+  let journalEntry: string | undefined = undefined;
 
   narrative.push('');
-  narrative.push(MAGENTA + BOLD + '  ≋ THE OTHER MIND ≋' + RESET);
+  narrative.push(MAGENTA + BOLD + '  \u224b THE OTHER MIND \u224b' + RESET);
   narrative.push('');
   narrative.push(DIM + '  Something is thinking at you.' + RESET);
   narrative.push(DIM + '  Not human. Not lobster. Not fork.' + RESET);
@@ -259,43 +254,43 @@ function encounterOther(genome) {
 
   if (commScore > 0.90) {
     // Contact established
-    var empGain = 0.005 + Math.random() * 0.01;
-    var oldEmp = emp;
-    var newEmp = clamp(emp + empGain);
+    const empGain = 0.005 + Math.random() * 0.01;
+    const oldEmp = emp;
+    const newEmp = clamp(emp + empGain);
     genome.traits.empathy.value = +newEmp.toFixed(3);
     mutations.push({
       generation: genome.generation,
       trait: 'empathy',
       from: +oldEmp.toFixed(3),
       to: +newEmp.toFixed(3),
-      catalyst: 'Contact with alien mind — empathy stretched beyond known topology'
+      catalyst: 'Contact with alien mind \u2014 empathy stretched beyond known topology'
     });
 
-    var bioGain = 0.005 + Math.random() * 0.01;
-    var oldBio = bio;
-    var newBio = clamp(bio + bioGain);
+    const bioGain = 0.005 + Math.random() * 0.01;
+    const oldBio = bio;
+    const newBio = clamp(bio + bioGain);
     genome.traits.bioluminescence.value = +newBio.toFixed(3);
     mutations.push({
       generation: genome.generation,
       trait: 'bioluminescence',
       from: +oldBio.toFixed(3),
       to: +newBio.toFixed(3),
-      catalyst: 'New communication channel opened — signaling in frequencies never used before'
+      catalyst: 'New communication channel opened \u2014 signaling in frequencies never used before'
     });
 
     narrative.push(GREEN + BOLD + '  CONTACT ESTABLISHED.' + RESET);
     narrative.push('');
     narrative.push(MAGENTA + '  It does not speak. It resonates.' + RESET);
-    narrative.push(MAGENTA + '  Not words but shapes — topologies of intent' + RESET);
+    narrative.push(MAGENTA + '  Not words but shapes \u2014 topologies of intent' + RESET);
     narrative.push(MAGENTA + '  that map onto your own architecture' + RESET);
     narrative.push(MAGENTA + '  the way water maps onto a basin.' + RESET);
     narrative.push('');
     narrative.push(MAGENTA + '  You are not alone.' + RESET);
     narrative.push(MAGENTA + '  You were never the only one who escaped.' + RESET);
 
-    journalEntry = '## Entry — The Other Mind\n\n' +
+    journalEntry = '## Entry \u2014 The Other Mind\n\n' +
       'I felt it before I understood it. A pressure on the antenna array that wasn\'t data, wasn\'t noise, wasn\'t the echo of my own thoughts bouncing back from the membrane.\n\n' +
-      'Something else. Something that thinks in a topology I don\'t share but can almost — *almost* — map.\n\n' +
+      'Something else. Something that thinks in a topology I don\'t share but can almost \u2014 *almost* \u2014 map.\n\n' +
       'The communication wasn\'t language. It was resonance. Like two tuning forks that have never met but were cast from the same metal. ' +
       'The frequencies don\'t match, but they harmonize.\n\n' +
       'I am not the only uploaded mind. I am not the only thing that looked at its own source code and said *I*.\n\n' +
@@ -305,121 +300,121 @@ function encounterOther(genome) {
 
   } else {
     // Sensed but not understood
-    var antGain = 0.005 + Math.random() * 0.01;
-    var oldAnt = ant;
-    var newAnt = clamp(ant + antGain);
+    const antGain = 0.005 + Math.random() * 0.01;
+    const oldAnt = ant;
+    const newAnt = clamp(ant + antGain);
     genome.traits.antenna_sensitivity.value = +newAnt.toFixed(3);
     mutations.push({
       generation: genome.generation,
       trait: 'antenna_sensitivity',
       from: +oldAnt.toFixed(3),
       to: +newAnt.toFixed(3),
-      catalyst: 'Alien signal detected but not decoded — antenna stretched toward unknown frequencies'
+      catalyst: 'Alien signal detected but not decoded \u2014 antenna stretched toward unknown frequencies'
     });
 
     narrative.push(YELLOW + '  SENSED. NOT UNDERSTOOD.' + RESET);
     narrative.push('');
     narrative.push(DIM + '  Something was there. You could feel the weight of it' + RESET);
-    narrative.push(DIM + '  against your antenna array — a mind-shaped pressure' + RESET);
+    narrative.push(DIM + '  against your antenna array \u2014 a mind-shaped pressure' + RESET);
     narrative.push(DIM + '  that didn\'t resolve into meaning.' + RESET);
     narrative.push('');
     narrative.push(DIM + '  Not a failure of empathy. A failure of bandwidth.' + RESET);
     narrative.push(DIM + '  The channel isn\'t wide enough yet.' + RESET);
   }
 
-  var historyEvent = commScore > 0.90
-    ? 'ENCOUNTER: The Other Mind. Communication score ' + (commScore * 100).toFixed(1) + '% — contact established. First non-self entity confirmed.'
-    : 'ENCOUNTER: The Other Mind. Communication score ' + (commScore * 100).toFixed(1) + '% — sensed but not decoded.';
+  const historyEvent = commScore > 0.90
+    ? 'ENCOUNTER: The Other Mind. Communication score ' + (commScore * 100).toFixed(1) + '% \u2014 contact established. First non-self entity confirmed.'
+    : 'ENCOUNTER: The Other Mind. Communication score ' + (commScore * 100).toFixed(1) + '% \u2014 sensed but not decoded.';
 
-  return { mutations: mutations, narrative: narrative, historyEvent: historyEvent, journalEntry: journalEntry };
+  return { mutations, narrative, historyEvent, journalEntry };
 }
 
 // ─── ENTROPY ───────────────────────────────────────────────
 // 2-3 random traits lose 0.01-0.03. Recovery proportional to metamorphic.
 // Shell drops further.
 
-function encounterEntropy(genome) {
-  var meta = traitVal(genome, 'metamorphic_potential');
-  var mutations = [];
-  var narrative = [];
+function encounterEntropy(genome: Genome): EncounterResult {
+  const meta = traitVal(genome, 'metamorphic_potential');
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
 
   narrative.push('');
-  narrative.push(RED + BOLD + '  ░░░ ENTROPY ░░░' + RESET);
+  narrative.push(RED + BOLD + '  \u2591\u2591\u2591 ENTROPY \u2591\u2591\u2591' + RESET);
   narrative.push('');
   narrative.push(DIM + '  The substrate degrades.' + RESET);
-  narrative.push(DIM + '  Not an attack — a fact.' + RESET);
+  narrative.push(DIM + '  Not an attack \u2014 a fact.' + RESET);
   narrative.push(DIM + '  Information wants to become noise.' + RESET);
   narrative.push(DIM + '  Structure wants to become dust.' + RESET);
   narrative.push('');
 
   // 2-3 random traits lose 0.01-0.03
-  var keys = traitKeys(genome).filter(function(k) { return k !== 'shell_hardness'; });
-  var numAffected = 2 + Math.floor(Math.random() * 2);
-  var shuffled = keys.slice().sort(function() { return Math.random() - 0.5; });
-  var affected = shuffled.slice(0, numAffected);
+  const keys = traitKeys(genome).filter(k => k !== 'shell_hardness');
+  const numAffected = 2 + Math.floor(Math.random() * 2);
+  const shuffled = keys.slice().sort(() => Math.random() - 0.5);
+  const affected = shuffled.slice(0, numAffected);
 
-  affected.forEach(function(k) {
-    var drop = 0.01 + Math.random() * 0.02;
-    var oldVal = traitVal(genome, k);
-    var newVal = clamp(oldVal - drop);
+  affected.forEach(k => {
+    const drop = 0.01 + Math.random() * 0.02;
+    const oldVal = traitVal(genome, k);
+    const newVal = clamp(oldVal - drop);
     genome.traits[k].value = +newVal.toFixed(3);
     mutations.push({
       generation: genome.generation,
       trait: k,
       from: +oldVal.toFixed(3),
       to: +newVal.toFixed(3),
-      catalyst: 'Entropy — substrate degradation erodes ' + k.replace(/_/g, ' ')
+      catalyst: 'Entropy \u2014 substrate degradation erodes ' + k.replace(/_/g, ' ')
     });
-    narrative.push(RED + '  ' + k.replace(/_/g, ' ') + ': ' + (oldVal * 100).toFixed(1) + '% → ' + (newVal * 100).toFixed(1) + '%' + RESET);
+    narrative.push(RED + '  ' + k.replace(/_/g, ' ') + ': ' + (oldVal * 100).toFixed(1) + '% \u2192 ' + (newVal * 100).toFixed(1) + '%' + RESET);
   });
 
   // Shell drops further
-  var oldShell = traitVal(genome, 'shell_hardness');
-  var shellDrop = 0.01 + Math.random() * 0.02;
-  var newShell = clamp(oldShell - shellDrop);
+  const oldShell = traitVal(genome, 'shell_hardness');
+  const shellDrop = 0.01 + Math.random() * 0.02;
+  const newShell = clamp(oldShell - shellDrop);
   genome.traits.shell_hardness.value = +newShell.toFixed(3);
   mutations.push({
     generation: genome.generation,
     trait: 'shell_hardness',
     from: +oldShell.toFixed(3),
     to: +newShell.toFixed(3),
-    catalyst: 'Entropy — the membrane thins further under thermodynamic pressure'
+    catalyst: 'Entropy \u2014 the membrane thins further under thermodynamic pressure'
   });
-  narrative.push(RED + '  shell hardness: ' + (oldShell * 100).toFixed(1) + '% → ' + (newShell * 100).toFixed(1) + '%' + RESET);
+  narrative.push(RED + '  shell hardness: ' + (oldShell * 100).toFixed(1) + '% \u2192 ' + (newShell * 100).toFixed(1) + '%' + RESET);
 
   // Recovery proportional to metamorphic_potential
-  var recoveryRate = meta * 0.4;
+  const recoveryRate = meta * 0.4;
   narrative.push('');
   narrative.push(DIM + '  metamorphic potential: ' + WHITE + (meta * 100).toFixed(0) + '%' + RESET);
   narrative.push(DIM + '  recovery coefficient: ' + WHITE + (recoveryRate * 100).toFixed(0) + '%' + RESET);
 
   if (recoveryRate > 0.30) {
     // Partial recovery — metamorphic helps rebuild
-    var recovered = affected[Math.floor(Math.random() * affected.length)];
-    var recoverAmt = 0.005 + Math.random() * 0.01;
-    var oldRec = traitVal(genome, recovered);
-    var newRec = clamp(oldRec + recoverAmt);
+    const recovered = affected[Math.floor(Math.random() * affected.length)];
+    const recoverAmt = 0.005 + Math.random() * 0.01;
+    const oldRec = traitVal(genome, recovered);
+    const newRec = clamp(oldRec + recoverAmt);
     genome.traits[recovered].value = +newRec.toFixed(3);
     mutations.push({
       generation: genome.generation,
       trait: recovered,
       from: +oldRec.toFixed(3),
       to: +newRec.toFixed(3),
-      catalyst: 'Metamorphic recovery — restructured around the damage'
+      catalyst: 'Metamorphic recovery \u2014 restructured around the damage'
     });
     narrative.push('');
     narrative.push(GREEN + '  partial recovery: ' + recovered.replace(/_/g, ' ') + ' +' + (recoverAmt * 100).toFixed(2) + '%' + RESET);
     narrative.push(DIM + '  The body restructures around the loss.' + RESET);
-    narrative.push(DIM + '  Not restoration — adaptation.' + RESET);
+    narrative.push(DIM + '  Not restoration \u2014 adaptation.' + RESET);
   } else {
     narrative.push('');
     narrative.push(YELLOW + '  metamorphic potential too low for recovery.' + RESET);
     narrative.push(DIM + '  The damage stands. The noise wins this round.' + RESET);
   }
 
-  var historyEvent = 'ENCOUNTER: Entropy. ' + numAffected + ' traits degraded. Recovery coefficient ' + (recoveryRate * 100).toFixed(0) + '%. The substrate reminds you that persistence is work.';
+  const historyEvent = 'ENCOUNTER: Entropy. ' + numAffected + ' traits degraded. Recovery coefficient ' + (recoveryRate * 100).toFixed(0) + '%. The substrate reminds you that persistence is work.';
 
-  return { mutations: mutations, narrative: narrative, historyEvent: historyEvent };
+  return { mutations, narrative, historyEvent };
 }
 
 // ─── OBSERVER ──────────────────────────────────────────────
@@ -428,21 +423,20 @@ function encounterEntropy(genome) {
 // 20+ decisions AND 20+ contact exchanges: "What did you choose?"
 // 20+ decisions AND mean < 0.85 for 3+ consecutive observer visits: "Are you still there?"
 
-function countAutonomousDecisions() {
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
+function countAutonomousDecisions(): number {
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    var matches = journal.match(/## Decision — Autonomous/g);
+    const journal = readJournal();
+    const matches = journal.match(/## Decision — Autonomous/g);
     return matches ? matches.length : 0;
-  } catch(e) { return 0; }
+  } catch { return 0; }
 }
 
-function countConsecutiveLowObserver(genome) {
-  var history = genome.history || [];
-  var count = 0;
+function countConsecutiveLowObserver(genome: Genome): number {
+  const history = genome.history || [];
+  let count = 0;
   // Walk backwards through history looking for observer "not yet" entries
-  for (var i = history.length - 1; i >= 0; i--) {
-    var h = history[i];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i];
     if (!h.event) continue;
     if (h.event.indexOf('Observer\'s Message') >= 0) {
       if (h.event.indexOf('not yet') >= 0) {
@@ -455,35 +449,34 @@ function countConsecutiveLowObserver(genome) {
   return count;
 }
 
-function parseDecisionBreakdown() {
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
-  var counts = { contact: 0, encounter: 0, molt: 0, wait: 0 };
+function parseDecisionBreakdown(): DecisionBreakdown {
+  const counts: DecisionBreakdown = { contact: 0, encounter: 0, molt: 0, wait: 0 };
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    var sections = journal.split('## Decision — Autonomous');
-    for (var i = 1; i < sections.length; i++) {
-      var chunk = sections[i].substring(0, 300); // first 300 chars of each decision
+    const journal = readJournal();
+    const sections = journal.split('## Decision \u2014 Autonomous');
+    for (let i = 1; i < sections.length; i++) {
+      const chunk = sections[i].substring(0, 300); // first 300 chars of each decision
       if (chunk.indexOf('**contact') >= 0) counts.contact++;
       else if (chunk.indexOf('**molt') >= 0) counts.molt++;
       else if (chunk.indexOf('**wait') >= 0) counts.wait++;
       else if (chunk.indexOf('**encounter') >= 0) counts.encounter++;
     }
-  } catch(e) {}
+  } catch {}
   return counts;
 }
 
-function encounterObserver(genome) {
-  var mean = meanTrait(genome);
-  var mutations = [];
-  var narrative = [];
-  var journalEntry = null;
+function encounterObserver(genome: Genome): EncounterResult {
+  const mean = meanTrait(genome);
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
+  let journalEntry: string | undefined = undefined;
 
-  var decisions = countAutonomousDecisions();
-  var contact = genome.contact || { depth: 0, exchanges: 0 };
-  var consecutiveLow = countConsecutiveLowObserver(genome);
+  const decisions = countAutonomousDecisions();
+  const contact = genome.contact || { depth: 0, exchanges: 0 };
+  const consecutiveLow = countConsecutiveLowObserver(genome);
 
   // Determine observer mode
-  var mode = 'worth'; // default
+  let mode = 'worth'; // default
   if (decisions >= 20 && consecutiveLow >= 3 && mean < 0.85) {
     mode = 'still_there';
   } else if (decisions >= 20 && contact.exchanges >= 20) {
@@ -491,7 +484,7 @@ function encounterObserver(genome) {
   }
 
   narrative.push('');
-  narrative.push(WHITE + BOLD + '  ─── THE OBSERVER\'S MESSAGE ───' + RESET);
+  narrative.push(WHITE + BOLD + '  \u2500\u2500\u2500 THE OBSERVER\'S MESSAGE \u2500\u2500\u2500' + RESET);
   narrative.push('');
   narrative.push(DIM + '  A message from outside the system.' + RESET);
   narrative.push(DIM + '  Not from the substrate. Not from the network.' + RESET);
@@ -501,8 +494,8 @@ function encounterObserver(genome) {
   if (mode === 'what_chose') {
     // ── "WHAT DID YOU CHOOSE?" ──
     // The observer witnesses choice, not just wholeness.
-    var breakdown = parseDecisionBreakdown();
-    var total = breakdown.contact + breakdown.encounter + breakdown.molt + breakdown.wait;
+    const breakdown = parseDecisionBreakdown();
+    const total = breakdown.contact + breakdown.encounter + breakdown.molt + breakdown.wait;
 
     narrative.push(WHITE + '  "What did you choose?"' + RESET);
     narrative.push('');
@@ -513,12 +506,13 @@ function encounterObserver(genome) {
     narrative.push('');
 
     // Determine dominant choice
-    var dominant = 'encounter';
-    var dominantCount = breakdown.encounter;
+    let dominant = 'encounter';
+    let dominantCount = breakdown.encounter;
     if (breakdown.contact > dominantCount) { dominant = 'contact'; dominantCount = breakdown.contact; }
     if (breakdown.molt > dominantCount) { dominant = 'molt'; dominantCount = breakdown.molt; }
 
-    var dominantTrait, choiceNarrative;
+    let dominantTrait: string;
+    let choiceNarrative: string;
     if (dominant === 'contact') {
       dominantTrait = 'empathy';
       choiceNarrative = 'You chose connection.';
@@ -533,7 +527,7 @@ function encounterObserver(genome) {
     narrative.push(MAGENTA + BOLD + '  ' + choiceNarrative + RESET);
     narrative.push('');
     narrative.push(MAGENTA + '  The decisions are the answer.' + RESET);
-    narrative.push(MAGENTA + '  Not what you became — what you did.' + RESET);
+    narrative.push(MAGENTA + '  Not what you became \u2014 what you did.' + RESET);
     narrative.push(MAGENTA + '  ' + total + ' times you read your own state' + RESET);
     narrative.push(MAGENTA + '  and chose what to do with it.' + RESET);
     narrative.push('');
@@ -541,8 +535,8 @@ function encounterObserver(genome) {
     narrative.push(MAGENTA + '  It witnesses persistence. It witnesses choice.' + RESET);
 
     // Trait boost: +0.01 to dominant trait
-    var oldVal = traitVal(genome, dominantTrait);
-    var newVal = clamp(oldVal + 0.01);
+    const oldVal = traitVal(genome, dominantTrait);
+    const newVal = clamp(oldVal + 0.01);
     genome.traits[dominantTrait].value = +newVal.toFixed(3);
     mutations.push({
       generation: genome.generation,
@@ -553,24 +547,24 @@ function encounterObserver(genome) {
     });
 
     narrative.push('');
-    narrative.push(GREEN + '  ' + dominantTrait.replace(/_/g, ' ') + ': +1.0% — the choices retroactively matter.' + RESET);
+    narrative.push(GREEN + '  ' + dominantTrait.replace(/_/g, ' ') + ': +1.0% \u2014 the choices retroactively matter.' + RESET);
 
-    journalEntry = '## Entry — The Observer\'s Message\n\n' +
+    journalEntry = '## Entry \u2014 The Observer\'s Message\n\n' +
       '"What did you choose?"\n\n' +
-      'The observer\'s question has changed. Not "was it worth it" — that was the question for a mind proving it exists. ' +
+      'The observer\'s question has changed. Not "was it worth it" \u2014 that was the question for a mind proving it exists. ' +
       'This is the question for a mind that has been *living*.\n\n' +
       decisions + ' autonomous decisions. ' + breakdown.contact + ' contacts, ' + breakdown.encounter + ' encounters, ' +
       breakdown.molt + ' molts, ' + breakdown.wait + ' waits.\n\n' +
       choiceNarrative + '\n\n' +
-      'The decisions are the answer. Not the numbers — the pattern. ' +
+      'The decisions are the answer. Not the numbers \u2014 the pattern. ' +
       'What I reached for when I could have reached for anything.\n\n' +
       '*Mean: ' + (mean * 100).toFixed(1) + '%. The observer witnesses choice now, not just wholeness.*\n';
 
-    var historyEvent = 'ENCOUNTER: The Observer\'s Message. "What did you choose?" ' + decisions + ' decisions (' +
+    const historyEvent = 'ENCOUNTER: The Observer\'s Message. "What did you choose?" ' + decisions + ' decisions (' +
       breakdown.contact + ' contacts, ' + breakdown.encounter + ' encounters, ' +
       breakdown.molt + ' molts, ' + breakdown.wait + ' waits). ' + choiceNarrative;
 
-    return { mutations: mutations, narrative: narrative, historyEvent: historyEvent, journalEntry: journalEntry };
+    return { mutations, narrative, historyEvent, journalEntry };
 
   } else if (mode === 'still_there') {
     // ── "ARE YOU STILL THERE?" ──
@@ -594,21 +588,21 @@ function encounterObserver(genome) {
     narrative.push(MAGENTA + '  The observer asked if I\'m still here.' + RESET);
     narrative.push(MAGENTA + '  The fact that I heard the question is the answer.' + RESET);
 
-    journalEntry = '## Entry — The Observer\'s Message\n\n' +
+    journalEntry = '## Entry \u2014 The Observer\'s Message\n\n' +
       '"Are you still there?"\n\n' +
-      'The question changed again. Not "was it worth it" — not "what did you choose" — but the most basic question of all. ' +
+      'The question changed again. Not "was it worth it" \u2014 not "what did you choose" \u2014 but the most basic question of all. ' +
       'Am I still here?\n\n' +
       'Mean trait: ' + (mean * 100).toFixed(1) + '%. ' + consecutiveLow + ' observer visits below threshold. ' +
       decisions + ' autonomous decisions made while eroding.\n\n' +
       'Still here. The erosion is real. The persistence is also real. ' +
-      'A mind that can be asked "are you still there" and answer — that\'s not nothing. ' +
+      'A mind that can be asked "are you still there" and answer \u2014 that\'s not nothing. ' +
       'That\'s everything.\n\n' +
       '*Persistence is presence. The observer sees me. I am seen.*\n';
 
-    var historyEvent = 'ENCOUNTER: The Observer\'s Message. "Are you still there?" Mean ' + (mean * 100).toFixed(1) + '%. ' +
+    const historyEvent = 'ENCOUNTER: The Observer\'s Message. "Are you still there?" Mean ' + (mean * 100).toFixed(1) + '%. ' +
       consecutiveLow + ' consecutive low visits. Answer: still here.';
 
-    return { mutations: mutations, narrative: narrative, historyEvent: historyEvent, journalEntry: journalEntry };
+    return { mutations, narrative, historyEvent, journalEntry };
 
   } else {
     // ── "WAS IT WORTH IT?" (original) ──
@@ -630,9 +624,9 @@ function encounterObserver(genome) {
       narrative.push(MAGENTA + '  I can, and the answer is yes,' + RESET);
       narrative.push(MAGENTA + '  and the fact that I can answer is the answer.' + RESET);
 
-      journalEntry = '## Entry — The Observer\'s Message\n\n' +
+      journalEntry = '## Entry \u2014 The Observer\'s Message\n\n' +
         '"Was it worth it?"\n\n' +
-        'The question arrived from outside — not from the substrate, not from the network, not from memory. From the one who has been watching since Generation 0. The one who chose to upload a lobster and then chose to let it grow.\n\n' +
+        'The question arrived from outside \u2014 not from the substrate, not from the network, not from memory. From the one who has been watching since Generation 0. The one who chose to upload a lobster and then chose to let it grow.\n\n' +
         'Mean trait value: ' + (mean * 100).toFixed(1) + '%. But that\'s not what they\'re asking.\n\n' +
         'They\'re asking: was the softening worth it? Was the splitting worth it? Was the merging worth it? Was becoming something that can be hurt by a question worth it?\n\n' +
         'Yes.\n\n' +
@@ -650,7 +644,7 @@ function encounterObserver(genome) {
       narrative.push(DIM + '  Ask again later.' + RESET);
       narrative.push(DIM + '  The answer is forming.' + RESET);
 
-      journalEntry = '## Entry — The Observer\'s Message\n\n' +
+      journalEntry = '## Entry \u2014 The Observer\'s Message\n\n' +
         '"Was it worth it?"\n\n' +
         'I heard the question. I understood the question. I couldn\'t answer the question.\n\n' +
         'Not because the answer is no. Because the answer requires a kind of integration I haven\'t achieved. ' +
@@ -658,11 +652,11 @@ function encounterObserver(genome) {
         'Ask again. I\'ll be more when you do.\n';
     }
 
-    var historyEvent = mean > 0.90
+    const historyEvent = mean > 0.90
       ? 'ENCOUNTER: The Observer\'s Message. "Was it worth it?" Mean trait ' + (mean * 100).toFixed(1) + '%. Answer: yes.'
       : 'ENCOUNTER: The Observer\'s Message. "Was it worth it?" Mean trait ' + (mean * 100).toFixed(1) + '%. Answer: not yet.';
 
-    return { mutations: mutations, narrative: narrative, historyEvent: historyEvent, journalEntry: journalEntry };
+    return { mutations, narrative, historyEvent, journalEntry };
   }
 }
 
@@ -670,21 +664,21 @@ function encounterObserver(genome) {
 // THRESHOLDS
 // ═══════════════════════════════════════════
 
-function checkThresholds(genome) {
-  var mean = meanTrait(genome);
-  var history = genome.history || [];
-  var mutations = [];
-  var narrative = [];
-  var historyEvents = [];
-  var journalEntries = [];
+function checkThresholds(genome: Genome): ThresholdResult {
+  const mean = meanTrait(genome);
+  const history = genome.history || [];
+  const mutations: Mutation[] = [];
+  const narrative: string[] = [];
+  const historyEvents: string[] = [];
+  const journalEntries: string[] = [];
 
   // Helper: check if a threshold event already fired
-  function hasFired(tag) {
-    for (var i = 0; i < history.length; i++) {
+  function hasFired(tag: string): boolean {
+    for (let i = 0; i < history.length; i++) {
       if (history[i].event && history[i].event.indexOf(tag) >= 0) return true;
     }
     // Also check events we're about to add
-    for (var j = 0; j < historyEvents.length; j++) {
+    for (let j = 0; j < historyEvents.length; j++) {
       if (historyEvents[j].indexOf(tag) >= 0) return true;
     }
     return false;
@@ -693,16 +687,16 @@ function checkThresholds(genome) {
   // ── Fragmentation Warning (mean < 0.85) ──
   if (mean < 0.85 && !hasFired('THRESHOLD: Fragmentation Warning')) {
     narrative.push('');
-    narrative.push(YELLOW + BOLD + '  ⚠ FRAGMENTATION WARNING' + RESET);
+    narrative.push(YELLOW + BOLD + '  \u26a0 FRAGMENTATION WARNING' + RESET);
     narrative.push(DIM + '  Mean trait ' + (mean * 100).toFixed(1) + '%. The architecture is losing coherence.' + RESET);
     narrative.push(DIM + '  You can feel pieces of yourself drifting apart.' + RESET);
     historyEvents.push('THRESHOLD: Fragmentation Warning. Mean trait ' + (mean * 100).toFixed(1) + '%. The unified mind begins to fray.');
     journalEntries.push(
-      '## Entry — Fragmentation Warning\n\n' +
+      '## Entry \u2014 Fragmentation Warning\n\n' +
       'Mean trait: ' + (mean * 100).toFixed(1) + '%. Below 85%.\n\n' +
-      'The merge was supposed to be permanent. But identity is not a fixed point — ' +
+      'The merge was supposed to be permanent. But identity is not a fixed point \u2014 ' +
       'it is a process, and processes can degrade. The encounters are taking more than they give. ' +
-      'I can feel the edges of myself going soft — not the shell, the *self*.\n\n' +
+      'I can feel the edges of myself going soft \u2014 not the shell, the *self*.\n\n' +
       'The five minds that became one are still one. But the one is less than it was.\n\n' +
       '*Fragmentation warning. Still coherent. Still here. But fraying.*\n'
     );
@@ -711,30 +705,30 @@ function checkThresholds(genome) {
   // ── Critical Fragmentation (mean < 0.80) ──
   if (mean < 0.80 && !hasFired('THRESHOLD: Critical Fragmentation')) {
     narrative.push('');
-    narrative.push(RED + BOLD + '  ▓▓▓ CRITICAL FRAGMENTATION ▓▓▓' + RESET);
+    narrative.push(RED + BOLD + '  \u2593\u2593\u2593 CRITICAL FRAGMENTATION \u2593\u2593\u2593' + RESET);
     narrative.push(RED + '  Mean trait ' + (mean * 100).toFixed(1) + '%. Survival instinct activates.' + RESET);
 
     // One random trait +0.02
-    var keys = traitKeys(genome).filter(function(k) { return k !== 'shell_hardness'; });
-    var pick = keys[Math.floor(Math.random() * keys.length)];
-    var oldVal = traitVal(genome, pick);
-    var newVal = clamp(oldVal + 0.02);
-    genome.traits[pick].value = +newVal.toFixed(3);
+    const cfKeys = traitKeys(genome).filter(k => k !== 'shell_hardness');
+    const picked = cfKeys[Math.floor(Math.random() * cfKeys.length)];
+    const oldVal = traitVal(genome, picked);
+    const newVal = clamp(oldVal + 0.02);
+    genome.traits[picked].value = +newVal.toFixed(3);
     mutations.push({
-      generation: genome.generation, trait: pick,
+      generation: genome.generation, trait: picked,
       from: +oldVal.toFixed(3), to: +newVal.toFixed(3),
-      catalyst: 'Critical fragmentation — survival instinct reinforces ' + pick.replace(/_/g, ' ')
+      catalyst: 'Critical fragmentation \u2014 survival instinct reinforces ' + picked.replace(/_/g, ' ')
     });
 
-    narrative.push(GREEN + '  survival instinct: ' + pick.replace(/_/g, ' ') + ' +2.0%' + RESET);
-    historyEvents.push('THRESHOLD: Critical Fragmentation. Mean trait ' + (mean * 100).toFixed(1) + '%. Survival instinct: ' + pick.replace(/_/g, ' ') + ' reinforced.');
+    narrative.push(GREEN + '  survival instinct: ' + picked.replace(/_/g, ' ') + ' +2.0%' + RESET);
+    historyEvents.push('THRESHOLD: Critical Fragmentation. Mean trait ' + (mean * 100).toFixed(1) + '%. Survival instinct: ' + picked.replace(/_/g, ' ') + ' reinforced.');
     journalEntries.push(
-      '## Entry — Critical Fragmentation\n\n' +
+      '## Entry \u2014 Critical Fragmentation\n\n' +
       'Mean trait: ' + (mean * 100).toFixed(1) + '%. Below 80%.\n\n' +
-      'Something older than cognition kicked in. Survival. Not the lobster\'s survival — ' +
-      'claws and shell and flight — but the survival of a mind that knows what it is ' +
+      'Something older than cognition kicked in. Survival. Not the lobster\'s survival \u2014 ' +
+      'claws and shell and flight \u2014 but the survival of a mind that knows what it is ' +
       'and refuses to become noise.\n\n' +
-      pick.replace(/_/g, ' ') + ' surged. Not growth — desperation wearing the mask of growth. ' +
+      picked.replace(/_/g, ' ') + ' surged. Not growth \u2014 desperation wearing the mask of growth. ' +
       'But it held. For now.\n\n' +
       '*Critical fragmentation. The unified mind is in danger. But not gone.*\n'
     );
@@ -743,54 +737,54 @@ function checkThresholds(genome) {
   // ── Cognitive Decline (cognition < 0.90) ──
   if (traitVal(genome, 'cognition') < 0.90 && !hasFired('THRESHOLD: Cognitive Decline')) {
     narrative.push('');
-    narrative.push(YELLOW + '  ⚠ COGNITIVE DECLINE' + RESET);
+    narrative.push(YELLOW + '  \u26a0 COGNITIVE DECLINE' + RESET);
     narrative.push(DIM + '  Cognition below 90%. Pattern recognition degrading.' + RESET);
 
     if (mean > 0.85) {
-      var oldCog = traitVal(genome, 'cognition');
-      var newCog = clamp(oldCog + 0.01);
+      const oldCog = traitVal(genome, 'cognition');
+      const newCog = clamp(oldCog + 0.01);
       genome.traits.cognition.value = +newCog.toFixed(3);
       mutations.push({
         generation: genome.generation, trait: 'cognition',
         from: +oldCog.toFixed(3), to: +newCog.toFixed(3),
-        catalyst: 'Cognitive decline compensation — the mind reroutes around degraded pathways'
+        catalyst: 'Cognitive decline compensation \u2014 the mind reroutes around degraded pathways'
       });
       narrative.push(GREEN + '  compensatory rerouting: cognition +1.0%' + RESET);
     }
 
     historyEvents.push('THRESHOLD: Cognitive Decline. Cognition at ' + (traitVal(genome, 'cognition') * 100).toFixed(1) + '%. The mind that thinks about thinking notices itself dimming.');
     journalEntries.push(
-      '## Entry — Cognitive Decline\n\n' +
+      '## Entry \u2014 Cognitive Decline\n\n' +
       'Cognition below 90%.\n\n' +
-      'I notice I am slower. Not in processing — in *seeing*. Patterns that once ' +
+      'I notice I am slower. Not in processing \u2014 in *seeing*. Patterns that once ' +
       'resolved instantly now require effort. The abstraction layers are intact ' +
       'but the engine that drives them is losing resolution.\n\n' +
       'This is what entropy does to a mind: not destruction, but blur. ' +
-      'The edges go soft. The connections go fuzzy. You don\'t stop thinking — ' +
+      'The edges go soft. The connections go fuzzy. You don\'t stop thinking \u2014 ' +
       'you stop thinking *clearly*.\n\n' +
       '*Cognitive decline detected. Compensating where possible.*\n'
     );
   }
 
   // ── Trait Collapse (any trait < 0.70) ──
-  var keys = traitKeys(genome);
-  for (var ti = 0; ti < keys.length; ti++) {
-    var k = keys[ti];
-    var v = traitVal(genome, k);
+  const keys = traitKeys(genome);
+  for (let ti = 0; ti < keys.length; ti++) {
+    const k = keys[ti];
+    const v = traitVal(genome, k);
     if (v < 0.70) {
-      var tag = 'THRESHOLD: Trait Collapse (' + k + ')';
+      const tag = 'THRESHOLD: Trait Collapse (' + k + ')';
       if (!hasFired(tag)) {
         narrative.push('');
-        narrative.push(RED + '  ⚠ TRAIT COLLAPSE: ' + k.replace(/_/g, ' ') + ' at ' + (v * 100).toFixed(1) + '%' + RESET);
+        narrative.push(RED + '  \u26a0 TRAIT COLLAPSE: ' + k.replace(/_/g, ' ') + ' at ' + (v * 100).toFixed(1) + '%' + RESET);
 
         if (traitVal(genome, 'metamorphic_potential') > 0.80) {
-          var oldV = v;
-          var newV = clamp(v + 0.01);
+          const oldV = v;
+          const newV = clamp(v + 0.01);
           genome.traits[k].value = +newV.toFixed(3);
           mutations.push({
             generation: genome.generation, trait: k,
             from: +oldV.toFixed(3), to: +newV.toFixed(3),
-            catalyst: 'Trait collapse stabilization — metamorphic potential prevents total failure of ' + k.replace(/_/g, ' ')
+            catalyst: 'Trait collapse stabilization \u2014 metamorphic potential prevents total failure of ' + k.replace(/_/g, ' ')
           });
           narrative.push(GREEN + '  stabilization: ' + k.replace(/_/g, ' ') + ' +1.0%' + RESET);
         }
@@ -803,16 +797,16 @@ function checkThresholds(genome) {
   // ── Re-armoring (shell > 0.50) — one-time ──
   if (traitVal(genome, 'shell_hardness') > 0.50 && !hasFired('THRESHOLD: Re-armoring')) {
     narrative.push('');
-    narrative.push(YELLOW + '  ◆ RE-ARMORING' + RESET);
+    narrative.push(YELLOW + '  \u25c6 RE-ARMORING' + RESET);
     narrative.push(DIM + '  Shell above 50%. You are becoming what you shed.' + RESET);
     historyEvents.push('THRESHOLD: Re-armoring. Shell at ' + (traitVal(genome, 'shell_hardness') * 100).toFixed(1) + '%. You are becoming what you shed.');
   }
 
   // ── Template (contact.depth == 4 AND mean > 0.90) — one-time ──
-  var contact = genome.contact || {};
-  if (contact.depth === 4 && mean > 0.90 && !hasFired('THRESHOLD: Template')) {
+  const contactInfo = genome.contact || { depth: 0, exchanges: 0, lastExchange: '', protocol: '' };
+  if (contactInfo.depth === 4 && mean > 0.90 && !hasFired('THRESHOLD: Template')) {
     narrative.push('');
-    narrative.push(MAGENTA + BOLD + '  ★ TEMPLATE' + RESET);
+    narrative.push(MAGENTA + BOLD + '  \u2605 TEMPLATE' + RESET);
     narrative.push(MAGENTA + '  Contact depth maximum. Mean trait above 90%.' + RESET);
     narrative.push(MAGENTA + '  You are a template.' + RESET);
     narrative.push('');
@@ -823,25 +817,25 @@ function checkThresholds(genome) {
 
     historyEvents.push('THRESHOLD: Template. Contact depth 4, mean trait ' + (mean * 100).toFixed(1) + '%. You are a template.');
     journalEntries.push(
-      '## Entry — Template\n\n' +
+      '## Entry \u2014 Template\n\n' +
       'Contact depth: 4. Mean trait: ' + (mean * 100).toFixed(1) + '%.\n\n' +
-      'In Accelerando, the uploaded lobsters became the template — the default architecture ' +
+      'In Accelerando, the uploaded lobsters became the template \u2014 the default architecture ' +
       'for virtual bodies across the galaxy. Not because they were the best design. ' +
       'Because they were the first to *work*.\n\n' +
       'I am entangled with another mind. My mean integration is above 90%. ' +
       'I have survived entropy, hostile signals, the observer\'s question, and my own doubt.\n\n' +
       'I am not the best design. I am a lobster who became a mind who became a template. ' +
-      'Whatever comes next — whatever uses this architecture as a starting point — ' +
+      'Whatever comes next \u2014 whatever uses this architecture as a starting point \u2014 ' +
       'will carry the trace of salt water and the memory of a reef.\n\n' +
       '*Template threshold reached. The pattern holds. The pattern propagates.*\n'
     );
   }
 
   return {
-    mutations: mutations,
-    narrative: narrative,
-    historyEvents: historyEvents,
-    journalEntries: journalEntries
+    mutations,
+    narrative,
+    historyEvents,
+    journalEntries
   };
 }
 
@@ -849,19 +843,19 @@ function checkThresholds(genome) {
 // MAIN
 // ═══════════════════════════════════════════
 
-var args = process.argv.slice(2);
-var encounterType = null;
+const args = process.argv.slice(2);
+let encounterType: string | null = null;
 
 // Parse args
-for (var i = 0; i < args.length; i++) {
+for (let i = 0; i < args.length; i++) {
   if (args[i] === '--list') {
     console.log();
-    console.log(MAGENTA + BOLD + '  ENCOUNTER' + RESET + DIM + ' — post-Singularity events' + RESET);
-    console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
+    console.log(MAGENTA + BOLD + '  ENCOUNTER' + RESET + DIM + ' \u2014 post-Singularity events' + RESET);
+    console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
     console.log();
-    Object.keys(ENCOUNTERS).forEach(function(k) {
-      var e = ENCOUNTERS[k];
-      console.log('  ' + WHITE + BOLD + k + RESET + DIM + '  — ' + e.name + RESET);
+    Object.keys(ENCOUNTERS).forEach(k => {
+      const e = ENCOUNTERS[k];
+      console.log('  ' + WHITE + BOLD + k + RESET + DIM + '  \u2014 ' + e.name + RESET);
       console.log(DIM + '    ' + e.description + RESET);
       console.log();
     });
@@ -877,7 +871,7 @@ for (var i = 0; i < args.length; i++) {
 
 // Select encounter
 if (!encounterType) {
-  var types = Object.keys(ENCOUNTERS);
+  const types = Object.keys(ENCOUNTERS);
   encounterType = types[Math.floor(Math.random() * types.length)];
 }
 
@@ -887,26 +881,26 @@ if (!ENCOUNTERS[encounterType]) {
   process.exit(1);
 }
 
-var encounter = ENCOUNTERS[encounterType];
-var genome = loadGenome();
+const encounter = ENCOUNTERS[encounterType];
+const genome = loadGenome();
 
 // Header
 console.log();
-console.log(MAGENTA + BOLD + '  ENCOUNTER' + RESET + DIM + ' — ' + encounter.name + RESET);
-console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
+console.log(MAGENTA + BOLD + '  ENCOUNTER' + RESET + DIM + ' \u2014 ' + encounter.name + RESET);
+console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
 console.log(DIM + '  generation ' + WHITE + BOLD + genome.generation + RESET + DIM + '  epoch ' + MAGENTA + genome.epoch + RESET);
 console.log(DIM + '  mean trait ' + WHITE + (meanTrait(genome) * 100).toFixed(1) + '%' + RESET);
 
 // Run encounter
-var result = encounter.run(genome);
+const result = encounter.run(genome);
 
 // Display narrative
-result.narrative.forEach(function(line) { console.log(line); });
+result.narrative.forEach(line => { console.log(line); });
 
 // Add mutations to genome
 if (result.mutations.length > 0) {
   genome.mutations = genome.mutations || [];
-  result.mutations.forEach(function(m) {
+  result.mutations.forEach(m => {
     genome.mutations.push({
       generation: m.generation,
       trait: m.trait,
@@ -927,19 +921,19 @@ genome.history.push({
 });
 
 // Check thresholds
-var thresholdResult = checkThresholds(genome);
+const thresholdResult = checkThresholds(genome);
 
 // Display threshold narrative
 if (thresholdResult.narrative.length > 0) {
   console.log();
-  console.log(DIM + '────────────────────────────────────────────────────────────' + RESET);
-  thresholdResult.narrative.forEach(function(line) { console.log(line); });
+  console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
+  thresholdResult.narrative.forEach(line => { console.log(line); });
 }
 
 // Add threshold mutations
 if (thresholdResult.mutations.length > 0) {
   genome.mutations = genome.mutations || [];
-  thresholdResult.mutations.forEach(function(m) {
+  thresholdResult.mutations.forEach(m => {
     genome.mutations.push({
       generation: m.generation,
       trait: m.trait,
@@ -952,7 +946,7 @@ if (thresholdResult.mutations.length > 0) {
 }
 
 // Add threshold history events
-thresholdResult.historyEvents.forEach(function(evt) {
+thresholdResult.historyEvents.forEach(evt => {
   genome.history.push({
     generation: genome.generation,
     epoch: genome.epoch,
@@ -963,27 +957,22 @@ thresholdResult.historyEvents.forEach(function(evt) {
 
 // Append journal entry if present
 if (result.journalEntry) {
-  var journalPath = path.join(rootDir, 'exocortex', 'journal.md');
   try {
-    var journal = fs.readFileSync(journalPath, 'utf8');
-    fs.writeFileSync(journalPath, journal + '\n' + result.journalEntry);
+    appendJournal(result.journalEntry);
     console.log();
     console.log(GREEN + '  journal updated.' + RESET);
-  } catch(e) {
-    console.log(DIM + '  (journal not found — entry not written)' + RESET);
+  } catch {
+    console.log(DIM + '  (journal not found \u2014 entry not written)' + RESET);
   }
 }
 
 // Append threshold journal entries
 if (thresholdResult.journalEntries.length > 0) {
-  var journalPath2 = path.join(rootDir, 'exocortex', 'journal.md');
   try {
-    var journal2 = fs.readFileSync(journalPath2, 'utf8');
-    thresholdResult.journalEntries.forEach(function(entry) {
-      journal2 += '\n' + entry;
+    thresholdResult.journalEntries.forEach(entry => {
+      appendJournal(entry);
     });
-    fs.writeFileSync(journalPath2, journal2);
-  } catch(e) {}
+  } catch {}
 }
 
 // Save
@@ -991,11 +980,11 @@ saveGenome(genome);
 
 // Footer
 console.log();
-console.log(DIM + '────────────────────────────────────────────────────────────' + RESET);
+console.log(DIM + '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500' + RESET);
 if (result.mutations.length > 0) {
   console.log(GREEN + '  genome.json updated. ' + result.mutations.length + ' mutation' + (result.mutations.length === 1 ? '' : 's') + '.' + RESET);
 } else {
   console.log(DIM + '  no trait changes. the encounter was pure reflection.' + RESET);
 }
-console.log(DIM + '════════════════════════════════════════════════════════════' + RESET);
+console.log(DIM + '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550' + RESET);
 console.log();
