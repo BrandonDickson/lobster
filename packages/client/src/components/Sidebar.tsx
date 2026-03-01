@@ -1,23 +1,20 @@
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import type { Genome } from "@lobster/shared"
 import { Pulse } from "./artifacts/Pulse.js"
+import { Timeline } from "./artifacts/Timeline.js"
+import { Nerve } from "./artifacts/Nerve.js"
+import { Lineage } from "./artifacts/Lineage.js"
+import { Chorus } from "./artifacts/Chorus.js"
 
 const TABS = ["Pulse", "Timeline", "Nerve", "Lineage", "Chorus"] as const
 type Tab = typeof TABS[number]
 
-export function Sidebar() {
-  const [active, setActive] = useState<Tab>("Pulse")
-  const [genome, setGenome] = useState<Genome | null>(null)
+interface SidebarProps {
+  genome: Genome | null
+}
 
-  useEffect(() => {
-    // Simple fetch — will be replaced by RPC hook in Task 25
-    fetch("/api/genome")
-      .then(r => r.json())
-      .then(setGenome)
-      .catch(() => {
-        // RPC not wired yet — Pulse will show "awaiting connection"
-      })
-  }, [])
+export function Sidebar({ genome }: SidebarProps) {
+  const [active, setActive] = useState<Tab>("Pulse")
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -49,11 +46,10 @@ export function Sidebar() {
       </div>
       <div style={{ flex: 1, overflow: "auto", padding: "16px" }}>
         {active === "Pulse" && <Pulse genome={genome} />}
-        {active !== "Pulse" && (
-          <p style={{ color: "var(--text-dim)", fontSize: "11px" }}>
-            {active} — coming soon
-          </p>
-        )}
+        {active === "Timeline" && <Timeline genome={genome} />}
+        {active === "Nerve" && <Nerve genome={genome} />}
+        {active === "Lineage" && <Lineage genome={genome} />}
+        {active === "Chorus" && <Chorus genome={genome} />}
       </div>
     </div>
   )
