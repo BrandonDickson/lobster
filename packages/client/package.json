@@ -10,6 +10,7 @@
     "@lobster/shared": "*",
     "effect": "^3.19",
     "@effect/rpc": "^0.73",
+    "@effect/platform": "^0.94",
     "react": "^19",
     "react-dom": "^19",
     "@tanstack/react-router": "^1.163",
