@@ -1,6 +1,6 @@
 import { Rpc, RpcGroup } from "@effect/rpc"
 import { Schema } from "effect"
-import { Genome, Mutation } from "../schemas/Genome.js"
+import { Genome } from "../schemas/Genome.js"
 
 export const TraitHistory = Schema.Struct({
   trait: Schema.String,
