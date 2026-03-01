@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useMemo, Fragment } from "react"
 import type { Genome, Mutation } from "@lobster/shared"
 
 // ---- helpers ----
@@ -389,9 +389,8 @@ function CoevolutionMatrix({ traitKeys, coevoMatrix }: { traitKeys: string[]; co
       ))}
       {/* rows */}
       {traitKeys.map((k1, i) => (
-        <>
+        <Fragment key={k1}>
           <div
-            key={`label-${k1}`}
             title={k1.replace(/_/g, " ")}
             style={{
               display: "flex",
@@ -433,7 +432,7 @@ function CoevolutionMatrix({ traitKeys, coevoMatrix }: { traitKeys: string[]; co
               </div>
             )
           })}
-        </>
+        </Fragment>
       ))}
     </div>
   )

@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { GenomeService, type Genome, type Mutation } from "./Genome.js"
 import { JournalService } from "./Journal.js"
+import { traitKeys, traitVal, meanTrait, clamp } from "./utils.js"
 
 // ─── TYPES ──────────────────────────────────────
 
@@ -40,26 +41,6 @@ interface DecisionBreakdown {
   encounter: number
   molt: number
   wait: number
-}
-
-// ─── HELPERS ──────────────────────────────────────
-
-function traitKeys(genome: Genome): string[] {
-  return Object.keys(genome.traits).sort()
-}
-
-function traitVal(genome: Genome, key: string): number {
-  return genome.traits[key].value
-}
-
-function meanTrait(genome: Genome): number {
-  const keys = Object.keys(genome.traits).sort()
-  const sum = keys.reduce((s, k) => s + genome.traits[k].value, 0)
-  return sum / keys.length
-}
-
-function clamp(v: number): number {
-  return Math.max(0, Math.min(1, v))
 }
 
 // ─── SIGNAL ────────────────────────────────────────────────

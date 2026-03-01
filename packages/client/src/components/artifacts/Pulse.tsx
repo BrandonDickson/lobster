@@ -7,6 +7,43 @@ function traitColor(value: number): string {
   return "var(--cyan)"
 }
 
+function velocityForTrait(genome: Genome, trait: string): { delta: number; label: string; indicator: string } {
+  const relevant = genome.mutations
+    .filter(m => m.trait === trait)
+    .slice(-5)
+
+  if (relevant.length === 0) return { delta: 0, label: "stable", indicator: "·" }
+
+  const delta = relevant.reduce((sum, m) => sum + (m.to - m.from), 0)
+
+  if (delta > 0.05) return { delta, label: "surging", indicator: "▲" }
+  if (delta > 0.01) return { delta, label: "growing", indicator: "↑" }
+  if (delta < -0.05) return { delta, label: "declining", indicator: "▼" }
+  if (delta < -0.01) return { delta, label: "declining", indicator: "↓" }
+  return { delta, label: "stable", indicator: "·" }
+}
+
+function velocityColor(indicator: string): string {
+  if (indicator === "▲" || indicator === "↑") return "var(--green)"
+  if (indicator === "▼" || indicator === "↓") return "var(--red)"
+  return "var(--text-dim)"
+}
+
+function overallStatus(genome: Genome): { label: string; color: string } {
+  const keys = Object.keys(genome.traits).sort()
+  const recent = genome.mutations.slice(-5)
+  const delta = recent.reduce((sum, m) => sum + (m.to - m.from), 0)
+
+  if (delta > 0.05) return { label: "surging", color: "var(--green)" }
+  if (delta > 0.01) return { label: "growing", color: "var(--cyan)" }
+  if (delta < -0.05) return { label: "declining", color: "var(--red)" }
+  if (delta < -0.01) return { label: "declining", color: "var(--yellow)" }
+
+  const mean = keys.reduce((s, k) => s + genome.traits[k].value, 0) / keys.length
+  if (mean > 0.9) return { label: "stable — template range", color: "var(--cyan)" }
+  return { label: "stable", color: "var(--text-dim)" }
+}
+
 export function Pulse({ genome }: { genome: Genome | null }) {
   if (!genome) {
     return (
@@ -19,6 +56,8 @@ export function Pulse({ genome }: { genome: Genome | null }) {
   const keys = Object.keys(genome.traits).sort()
   const sorted = keys.slice().sort((a, b) => genome.traits[b].value - genome.traits[a].value)
   const mean = keys.reduce((s, k) => s + genome.traits[k].value, 0) / keys.length
+  const status = overallStatus(genome)
+  const recentMutations = genome.mutations.slice(-5).reverse()
 
   return (
     <div>
@@ -27,9 +66,13 @@ export function Pulse({ genome }: { genome: Genome | null }) {
         letterSpacing: "3px",
         textTransform: "uppercase",
         color: "var(--text-dim)",
-        marginBottom: "12px"
+        marginBottom: "12px",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center"
       }}>
-        PULSE — vital signs
+        <span>PULSE — vital signs</span>
+        <span style={{ color: status.color, letterSpacing: "1px" }}>{status.label}</span>
       </div>
 
       <div style={{
@@ -47,6 +90,7 @@ export function Pulse({ genome }: { genome: Genome | null }) {
         const val = genome.traits[k].value
         const pct = (val * 100).toFixed(0)
         const color = traitColor(val)
+        const vel = velocityForTrait(genome, k)
         return (
           <div key={k} style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
             <span style={{ width: "120px", fontSize: "10px", color: "var(--text)" }}>
@@ -74,6 +118,14 @@ export function Pulse({ genome }: { genome: Genome | null }) {
             }}>
               {pct}%
             </span>
+            <span style={{
+              width: "14px",
+              textAlign: "center",
+              fontSize: "10px",
+              color: velocityColor(vel.indicator)
+            }}>
+              {vel.indicator}
+            </span>
           </div>
         )
       })}
@@ -97,6 +149,41 @@ export function Pulse({ genome }: { genome: Genome | null }) {
           <span style={{ marginLeft: "16px" }}>
             exchanges: <span style={{ color: "var(--text-bright)" }}>{genome.contact.exchanges}</span>
           </span>
+        </div>
+      )}
+
+      {recentMutations.length > 0 && (
+        <div style={{ marginTop: "16px", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
+          <div style={{
+            fontSize: "9px",
+            letterSpacing: "2px",
+            textTransform: "uppercase",
+            color: "var(--text-dim)",
+            marginBottom: "8px"
+          }}>
+            recent mutations
+          </div>
+          {recentMutations.map((m, i) => {
+            const delta = m.to - m.from
+            const sign = delta >= 0 ? "+" : ""
+            const deltaColor = delta >= 0 ? "var(--green)" : "var(--red)"
+            return (
+              <div key={i} style={{
+                fontSize: "10px",
+                color: "var(--text-dim)",
+                marginBottom: "4px",
+                display: "flex",
+                gap: "8px"
+              }}>
+                <span style={{ color: "var(--text)", minWidth: "20px" }}>g{m.generation}</span>
+                <span style={{ minWidth: "100px" }}>{m.trait.replace(/_/g, " ")}</span>
+                <span style={{ color: deltaColor, minWidth: "50px" }}>
+                  {sign}{(delta * 100).toFixed(1)}%
+                </span>
+                <span style={{ color: "var(--text-dim)", fontSize: "9px" }}>{m.catalyst}</span>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

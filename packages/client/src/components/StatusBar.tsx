@@ -1,5 +1,7 @@
+import type { Genome } from "@lobster/shared"
+
 interface StatusBarProps {
-  genome: any | null
+  genome: Genome | null
 }
 
 export function StatusBar({ genome }: StatusBarProps) {

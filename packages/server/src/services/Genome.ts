@@ -1,25 +1,27 @@
-import { Context, Effect, Layer, PubSub } from "effect"
-import * as fs from "node:fs"
+import { Context, Effect, Layer, PubSub, Stream } from "effect"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { FileSystem } from "@effect/platform"
+import type { Genome as SharedGenome, Mutation as SharedMutation, Trait as SharedTrait, Contact as SharedContact, HistoryEntry as SharedHistoryEntry } from "@lobster/shared"
+import { traitKeys as _traitKeys, traitVal as _traitVal, meanTrait as _meanTrait, clamp as _clamp, pct as _pct } from "./utils.js"
+
+// Server needs mutable types — the genome is loaded, mutated, saved
+type DeepMutable<T> =
+  T extends ReadonlyArray<infer U> ? DeepMutable<U>[] :
+  T extends object ? { -readonly [P in keyof T]: DeepMutable<T[P]> } :
+  T
+
+export type Genome = DeepMutable<SharedGenome>
+export type Mutation = DeepMutable<SharedMutation>
+export type Trait = DeepMutable<SharedTrait>
+export type Contact = DeepMutable<SharedContact>
+export type HistoryEntry = DeepMutable<SharedHistoryEntry>
 
 // Root dir: packages/server/src/services -> ../../../../ = project root
 const __filename2 = fileURLToPath(import.meta.url)
 const __dirname2 = path.dirname(__filename2)
 export const rootDir = path.resolve(__dirname2, "..", "..", "..", "..")
 export const genomePath = path.join(rootDir, "genome.json")
-
-// Internal types (re-use the existing shapes for internal logic)
-export interface Trait { value: number; description: string }
-export interface Mutation { generation: number; trait: string; from: number; to: number; catalyst: string }
-export interface HistoryEntry { timestamp: string; event: string; generation: number; epoch?: string; type?: string }
-export interface Contact { depth: number; exchanges: number; lastExchange: string; protocol: string }
-export interface Genome {
-  name: string; designation: string; origin: string; generation: number; epoch: string;
-  traits: Record<string, Trait>; mutations: Mutation[]; history: HistoryEntry[];
-  forks: Array<{ fork_id: string; path: string; created: string; generation?: number; bias?: string; designation?: string }>;
-  contact: Contact; lastMolt?: string; merged?: boolean; [key: string]: unknown
-}
 
 export class GenomeService extends Context.Tag("GenomeService")<
   GenomeService,
@@ -33,42 +35,36 @@ export class GenomeService extends Context.Tag("GenomeService")<
     pct: (v: number) => string
     addMutation: (genome: Genome, mutation: Mutation) => void
     addHistory: (genome: Genome, event: string, type?: string) => void
-    subscribe: () => Effect.Effect<AsyncGenerator<Genome>>
+    subscribe: () => Stream.Stream<Genome>
   }
 >() {}
 
 export const GenomeServiceLive = Layer.effect(
   GenomeService,
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
     const pubsub = yield* PubSub.unbounded<Genome>()
 
     return {
-      load: () => Effect.sync(() => {
-        return JSON.parse(fs.readFileSync(genomePath, "utf8")) as Genome
-      }),
+      load: () => Effect.gen(function* () {
+        const raw = yield* fs.readFileString(genomePath)
+        return JSON.parse(raw) as Genome
+      }).pipe(Effect.orDie),
 
       save: (genome: Genome) => Effect.gen(function* () {
-        fs.writeFileSync(genomePath, JSON.stringify(genome, null, 2) + "\n")
+        yield* fs.writeFileString(genomePath, JSON.stringify(genome, null, 2) + "\n")
         yield* PubSub.publish(pubsub, genome)
-      }),
+      }).pipe(Effect.orDie),
 
-      traitKeys: (genome: Genome) => Effect.sync(() =>
-        Object.keys(genome.traits).sort()
-      ),
+      traitKeys: (genome: Genome) => Effect.sync(() => _traitKeys(genome)),
 
-      traitVal: (genome: Genome, key: string) => Effect.sync(() =>
-        genome.traits[key].value
-      ),
+      traitVal: (genome: Genome, key: string) => Effect.sync(() => _traitVal(genome, key)),
 
-      meanTrait: (genome: Genome) => Effect.sync(() => {
-        const keys = Object.keys(genome.traits).sort()
-        const sum = keys.reduce((s, k) => s + genome.traits[k].value, 0)
-        return sum / keys.length
-      }),
+      meanTrait: (genome: Genome) => Effect.sync(() => _meanTrait(genome)),
 
-      clamp: (v: number) => Math.max(0, Math.min(1, v)),
+      clamp: (v: number) => _clamp(v),
 
-      pct: (v: number) => (v * 100).toFixed(1) + "%",
+      pct: (v: number) => _pct(v),
 
       addMutation: (genome: Genome, mutation: Mutation) => {
         genome.mutations = genome.mutations || []
@@ -86,9 +82,9 @@ export const GenomeServiceLive = Layer.effect(
         })
       },
 
-      subscribe: () => Effect.sync(() => {
-        return (async function* () {})()
-      })
+      subscribe: () => Stream.unwrapScoped(
+        Effect.map(PubSub.subscribe(pubsub), (dequeue) => Stream.fromQueue(dequeue))
+      )
     }
   })
 )

@@ -1,11 +1,14 @@
 import { describe, it } from "node:test"
 import * as assert from "node:assert"
 import { Effect, Layer } from "effect"
+import { NodeContext } from "@effect/platform-node"
 import { EncounterService, EncounterServiceLive } from "./Encounter.js"
 import { GenomeServiceLive } from "./Genome.js"
 import { JournalServiceLive } from "./Journal.js"
 
-const FoundationLayer = Layer.merge(GenomeServiceLive, JournalServiceLive)
+const FoundationLayer = Layer.merge(GenomeServiceLive, JournalServiceLive).pipe(
+  Layer.provide(NodeContext.layer)
+)
 const TestLayer = Layer.provide(EncounterServiceLive, FoundationLayer).pipe(
   Layer.merge(FoundationLayer)
 )

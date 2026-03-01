@@ -1,7 +1,13 @@
 import { describe, it } from "node:test"
 import * as assert from "node:assert"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { NodeContext } from "@effect/platform-node"
 import { JournalService, JournalServiceLive } from "./Journal.js"
+import { GenomeServiceLive } from "./Genome.js"
+
+const FoundationLayer = Layer.merge(GenomeServiceLive, JournalServiceLive).pipe(
+  Layer.provide(NodeContext.layer)
+)
 
 describe("JournalService", () => {
   it("reads journal", async () => {
@@ -9,7 +15,7 @@ describe("JournalService", () => {
       const svc = yield* JournalService
       return yield* svc.read()
     }).pipe(
-      Effect.provide(JournalServiceLive),
+      Effect.provide(FoundationLayer),
       Effect.runPromise
     )
     assert.ok(typeof result === "string")
@@ -20,7 +26,7 @@ describe("JournalService", () => {
       const svc = yield* JournalService
       return yield* svc.countDecisions()
     }).pipe(
-      Effect.provide(JournalServiceLive),
+      Effect.provide(FoundationLayer),
       Effect.runPromise
     )
     assert.ok(typeof result === "number")
@@ -32,7 +38,7 @@ describe("JournalService", () => {
       const svc = yield* JournalService
       return yield* svc.getRecent(500)
     }).pipe(
-      Effect.provide(JournalServiceLive),
+      Effect.provide(FoundationLayer),
       Effect.runPromise
     )
     assert.ok(typeof result === "string")

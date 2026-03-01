@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { GenomeService, type Genome, type Mutation } from "./Genome.js"
 import { JournalService } from "./Journal.js"
+import { traitKeys, traitVal, meanTrait, clamp, pick } from "./utils.js"
 
 // ─── TYPES ──────────────────────────────────────
 
@@ -87,28 +88,6 @@ function ensureContactObject(genome: Genome): Genome["contact"] {
     }
   }
   return genome.contact
-}
-
-function traitVal(genome: Genome, key: string): number {
-  return genome.traits[key].value
-}
-
-function traitKeys(genome: Genome): string[] {
-  return Object.keys(genome.traits).sort()
-}
-
-function meanTrait(genome: Genome): number {
-  const keys = Object.keys(genome.traits).sort()
-  const sum = keys.reduce((s, k) => s + genome.traits[k].value, 0)
-  return sum / keys.length
-}
-
-function clamp(v: number): number {
-  return Math.max(0, Math.min(1, v))
-}
-
-function pick(arr: string[]): string {
-  return arr[Math.floor(Math.random() * arr.length)]
 }
 
 // ─── INTENT CLASSIFICATION ──────────────────────────────────

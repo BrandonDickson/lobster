@@ -13,15 +13,13 @@
     "@effect/platform": "^0.94",
     "react": "^19",
     "react-dom": "^19",
-    "@tanstack/react-router": "^1.163",
-    "@tanstack/react-form": "^1.28"
+    "@tanstack/react-router": "^1.163"
   },
   "devDependencies": {
     "typescript": "^5.7",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "vite": "^6",
-    "@vitejs/plugin-react": "^4",
-    "@tanstack/router-plugin": "^1"
+    "@vitejs/plugin-react": "^4"
   }
 }

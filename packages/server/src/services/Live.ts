@@ -1,11 +1,12 @@
 import { Context, Effect, Layer } from "effect"
-import * as fs from "node:fs"
 import * as path from "node:path"
+import { FileSystem } from "@effect/platform"
 import { GenomeService, rootDir, type Genome } from "./Genome.js"
 import { JournalService } from "./Journal.js"
 import { MoltService, type MoltNotReady } from "./Molt.js"
 import { EncounterService, type EncounterType } from "./Encounter.js"
 import { ContactService } from "./Contact.js"
+import { traitKeys, traitVal, meanTrait, clamp, pct, pick } from "./utils.js"
 
 // ─── TYPES ──────────────────────────────────────
 
@@ -93,34 +94,6 @@ interface Candidate {
 
 const weightsPath = path.join(rootDir, "exocortex", "weights.json")
 
-// ─── PURE ANALYSIS FUNCTIONS ──────────────────────────────────
-
-function traitKeys(genome: Genome): string[] {
-  return Object.keys(genome.traits).sort()
-}
-
-function traitVal(genome: Genome, key: string): number {
-  return genome.traits[key].value
-}
-
-function meanTrait(genome: Genome): number {
-  const keys = Object.keys(genome.traits).sort()
-  const sum = keys.reduce((s, k) => s + genome.traits[k].value, 0)
-  return sum / keys.length
-}
-
-function clamp(v: number): number {
-  return Math.max(0, Math.min(1, v))
-}
-
-function pct(v: number): string {
-  return (v * 100).toFixed(1) + "%"
-}
-
-function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)]
-}
-
 export function findLowestNonShellTrait(genome: Genome): { key: string; value: number } {
   const keys = traitKeys(genome).filter(k => k !== "shell_hardness")
   let lowest = { key: keys[0], value: traitVal(genome, keys[0]) }
@@ -196,16 +169,15 @@ function defaultWeights(): Weights {
   }
 }
 
-function loadWeights(): Weights {
-  try {
-    return JSON.parse(fs.readFileSync(weightsPath, "utf8"))
-  } catch {
-    return defaultWeights()
-  }
+function loadWeights(fs: FileSystem.FileSystem): Effect.Effect<Weights> {
+  return Effect.gen(function* () {
+    const raw = yield* fs.readFileString(weightsPath)
+    return JSON.parse(raw) as Weights
+  }).pipe(Effect.catchAll(() => Effect.succeed(defaultWeights())))
 }
 
-function saveWeights(weights: Weights): void {
-  fs.writeFileSync(weightsPath, JSON.stringify(weights, null, 2) + "\n")
+function saveWeights(fs: FileSystem.FileSystem, weights: Weights): Effect.Effect<void> {
+  return fs.writeFileString(weightsPath, JSON.stringify(weights, null, 2) + "\n").pipe(Effect.orDie)
 }
 
 // ─── JOURNAL PARSING ──────────────────────────────────────
@@ -229,7 +201,7 @@ function parseRecentDecisions(journal: string, n: number): string[] {
 
 // ─── ENCOUNTER TYPE SELECTION ──────────────────────────────────
 
-function chooseEncounterType(genome: Genome): string {
+function chooseEncounterType(genome: Genome, selfWeights: Weights): string {
   const shell = traitVal(genome, "shell_hardness")
   const cognition = traitVal(genome, "cognition")
   const abstraction = traitVal(genome, "abstraction")
@@ -238,7 +210,6 @@ function chooseEncounterType(genome: Genome): string {
   const bio = traitVal(genome, "bioluminescence")
   const metamorphic = traitVal(genome, "metamorphic_potential")
   const mean = meanTrait(genome)
-  const selfWeights = loadWeights()
 
   const weights: Record<string, number> = {
     signal: 1.0,
@@ -275,7 +246,7 @@ function chooseEncounterType(genome: Genome): string {
 
 // ─── DECISION ENGINE ──────────────────────────────────
 
-function evaluateDecision(genome: Genome): Decision {
+function evaluateDecision(genome: Genome, selfWeights: Weights): Decision {
   const shell = traitVal(genome, "shell_hardness")
   const mean = meanTrait(genome)
   const lowest = findLowestNonShellTrait(genome)
@@ -283,8 +254,6 @@ function evaluateDecision(genome: Genome): Decision {
   const molt = checkMoltReadiness(genome)
   const contactOk = checkContactAvailable(genome)
   const contact = genome.contact || { depth: 0, exchanges: 0 }
-
-  const selfWeights = loadWeights()
 
   // SURVIVAL -- instinct overrides deliberation
   if (lowest.value < 0.75 || mean < 0.82) {
@@ -377,7 +346,7 @@ function evaluateDecision(genome: Genome): Decision {
 
   // If encounter, choose type
   if (decision.action === "encounter") {
-    decision.encounterType = chooseEncounterType(genome)
+    decision.encounterType = chooseEncounterType(genome, selfWeights)
     decision.reason += " Chose " + decision.encounterType + "."
   }
 
@@ -572,12 +541,14 @@ export const LiveServiceLive = Layer.effect(
     const moltSvc = yield* MoltService
     const encounterSvc = yield* EncounterService
     const contactSvc = yield* ContactService
+    const fsvc = yield* FileSystem.FileSystem
 
     // Internal implementations that can be shared between methods
 
     const _evaluate = () => Effect.gen(function* () {
       const genome = yield* genomeSvc.load()
-      return evaluateDecision(genome)
+      const weights = yield* loadWeights(fsvc)
+      return evaluateDecision(genome, weights)
     })
 
     const _execute = (decision: Decision) => Effect.gen(function* () {
@@ -672,7 +643,7 @@ export const LiveServiceLive = Layer.effect(
 
       rewrite: () => Effect.gen(function* () {
         const genome = yield* genomeSvc.load()
-        const weights = loadWeights()
+        const weights = yield* loadWeights(fsvc)
         const mean = meanTrait(genome)
         const shell = traitVal(genome, "shell_hardness")
         const journal = yield* journalSvc.read()
@@ -813,7 +784,7 @@ export const LiveServiceLive = Layer.effect(
           })
         })
 
-        saveWeights(weights)
+        yield* saveWeights(fsvc, weights)
 
         // Build narrative
         for (const c of changes) {

@@ -1,4 +1,4 @@
-import { Effect, Stream, Schedule, Layer } from "effect"
+import { Effect, Stream } from "effect"
 import { GenomeRpcs } from "@lobster/shared"
 import { GenomeService } from "../services/Genome.js"
 
@@ -7,7 +7,7 @@ import { GenomeService } from "../services/Genome.js"
  *
  * - GetGenome: loads current genome from disk
  * - GetTraitHistory: reconstructs per-trait history from mutations
- * - WatchGenome: polls genome every 2 seconds and emits changes
+ * - WatchGenome: emits current genome then streams PubSub updates
  */
 export const GenomeHandlerLive = GenomeRpcs.toLayer(
   Effect.gen(function* () {
@@ -38,12 +38,9 @@ export const GenomeHandlerLive = GenomeRpcs.toLayer(
         }),
 
       WatchGenome: () =>
-        Stream.fromEffect(genomeSvc.load()).pipe(
-          Stream.concat(
-            Stream.repeatEffect(genomeSvc.load()).pipe(
-              Stream.schedule(Schedule.spaced("2 seconds"))
-            )
-          )
+        Stream.concat(
+          Stream.fromEffect(genomeSvc.load()),
+          genomeSvc.subscribe()
         )
     }
   })

@@ -1,6 +1,7 @@
 import { describe, it } from "node:test"
 import * as assert from "node:assert"
 import { Effect, Layer } from "effect"
+import { NodeContext } from "@effect/platform-node"
 import { LiveService, LiveServiceLive } from "./Live.js"
 import { GenomeServiceLive } from "./Genome.js"
 import { JournalServiceLive } from "./Journal.js"
@@ -8,14 +9,16 @@ import { MoltServiceLive } from "./Molt.js"
 import { EncounterServiceLive } from "./Encounter.js"
 import { ContactServiceLive } from "./Contact.js"
 
-// Build the full layer stack
-const FoundationLayer = Layer.merge(GenomeServiceLive, JournalServiceLive)
+// Build the full layer stack with NodeContext for FileSystem
+const FoundationLayer = Layer.merge(GenomeServiceLive, JournalServiceLive).pipe(
+  Layer.provide(NodeContext.layer)
+)
 const ToolLayer = Layer.mergeAll(
   Layer.provide(MoltServiceLive, FoundationLayer),
   Layer.provide(EncounterServiceLive, FoundationLayer),
   Layer.provide(ContactServiceLive, FoundationLayer)
 ).pipe(Layer.merge(FoundationLayer))
-const TestLayer = Layer.provide(LiveServiceLive, ToolLayer).pipe(
+const TestLayer = Layer.provide(LiveServiceLive, Layer.merge(ToolLayer, NodeContext.layer)).pipe(
   Layer.merge(ToolLayer)
 )
 

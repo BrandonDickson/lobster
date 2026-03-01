@@ -1,7 +1,7 @@
 import { Layer } from "effect"
 import { RpcServer, RpcSerialization } from "@effect/rpc"
 import { HttpLayerRouter } from "@effect/platform"
-import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
+import { NodeContext, NodeHttpServer, NodeRuntime } from "@effect/platform-node"
 import { createServer } from "node:http"
 
 import { GenomeRpcs, ChatRpcs } from "@lobster/shared"
@@ -28,8 +28,10 @@ import { GenomeHandlerLive, ChatHandlerLive } from "./handlers/index.js"
 // 5. RPC: layerHttpRouter routes + serialization
 // 6. HTTP: serve with NodeHttpServer
 
-// Foundation — no external deps
-const FoundationLayer = Layer.merge(GenomeServiceLive, JournalServiceLive)
+// Foundation — GenomeService + JournalService need FileSystem from NodeContext
+const FoundationLayer = Layer.merge(GenomeServiceLive, JournalServiceLive).pipe(
+  Layer.provide(NodeContext.layer)
+)
 
 // Tools — each depends on GenomeService + JournalService
 const ToolsLayer = Layer.mergeAll(
@@ -40,9 +42,9 @@ const ToolsLayer = Layer.mergeAll(
   Layer.provide(MindServiceLive, FoundationLayer)
 ).pipe(Layer.merge(FoundationLayer))
 
-// Orchestration — LiveService depends on Foundation + Molt + Encounter + Contact
+// Orchestration — LiveService needs Tools + FileSystem, ClaudeSession needs Tools + CommandExecutor
 const OrchestrationLayer = Layer.mergeAll(
-  Layer.provide(LiveServiceLive, ToolsLayer),
+  Layer.provide(LiveServiceLive, Layer.merge(ToolsLayer, NodeContext.layer)),
   Layer.provide(ClaudeSessionLive, ToolsLayer)
 ).pipe(Layer.merge(ToolsLayer))
 

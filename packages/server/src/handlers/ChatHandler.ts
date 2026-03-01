@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect"
+import { Effect, Option, Ref, Stream } from "effect"
 import { ChatRpcs, type ChatMessage, type ChatEvent } from "@lobster/shared"
 import { ClaudeSession, type ClaudeProcess } from "../providers/ClaudeSession.js"
 
@@ -55,37 +55,44 @@ function parseChatEvent(line: string): ChatEvent | null {
   }
 }
 
-const doneEvent: ChatEvent = { type: "done" as const }
-
 /**
  * ChatHandler — implements the ChatRpcs group.
  *
- * - SendMessage: starts a ClaudeSession, sends a message, streams ChatEvents
+ * - SendMessage: reuses a persistent ClaudeProcess across messages
  * - GetHistory: returns empty array (no persistence yet)
  */
 export const ChatHandlerLive = ChatRpcs.toLayer(
   Effect.gen(function* () {
     const session = yield* ClaudeSession
+    const procRef = yield* Ref.make<Option.Option<ClaudeProcess>>(Option.none())
+
+    const getOrStartProcess = Effect.gen(function* () {
+      const current = yield* Ref.get(procRef)
+      if (Option.isSome(current)) {
+        return current.value
+      }
+      const proc = yield* session.start()
+      yield* Ref.set(procRef, Option.some(proc))
+      return proc
+    })
 
     return {
       SendMessage: ({ message }: { message: string }) => {
-        const startAndSend = Effect.gen(function* () {
-          const proc: ClaudeProcess = yield* session.start()
+        const sendToProc = Effect.gen(function* () {
+          const proc = yield* getOrStartProcess
           yield* proc.send(message)
 
-          const eventStream = proc.output.pipe(
+          return proc.output.pipe(
             Stream.map((line) => parseChatEvent(line)),
             Stream.filter((evt): evt is ChatEvent => evt !== null),
             Stream.takeUntil((evt) => evt.type === "done"),
             Stream.orDie
           )
-
-          return eventStream
         }).pipe(
           Effect.orDie
         )
 
-        return Stream.unwrapScoped(startAndSend)
+        return Stream.unwrap(sendToProc)
       },
 
       GetHistory: () =>

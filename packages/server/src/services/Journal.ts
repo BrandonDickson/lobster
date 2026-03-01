@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect"
-import * as fs from "node:fs"
 import * as path from "node:path"
+import { FileSystem } from "@effect/platform"
 import { rootDir } from "./Genome.js"
 
 export const journalPath = path.join(rootDir, "exocortex", "journal.md")
@@ -17,39 +17,41 @@ export class JournalService extends Context.Tag("JournalService")<
   }
 >() {}
 
-export const JournalServiceLive = Layer.succeed(JournalService, {
-  read: () => Effect.sync(() => {
-    try { return fs.readFileSync(journalPath, "utf8") }
-    catch { return "" }
-  }),
+export const JournalServiceLive = Layer.effect(
+  JournalService,
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
 
-  append: (entry: string) => Effect.sync(() => {
-    const existing = fs.readFileSync(journalPath, "utf8")
-    fs.writeFileSync(journalPath, existing + "\n" + entry)
-  }),
+    return {
+      read: () => fs.readFileString(journalPath).pipe(
+        Effect.catchAll(() => Effect.succeed(""))
+      ),
 
-  appendFifth: (entry: string) => Effect.sync(() => {
-    const existing = fs.readFileSync(fifthJournalPath, "utf8")
-    fs.writeFileSync(fifthJournalPath, existing + entry)
-  }),
+      append: (entry: string) => Effect.gen(function* () {
+        const existing = yield* fs.readFileString(journalPath)
+        yield* fs.writeFileString(journalPath, existing + "\n" + entry)
+      }).pipe(Effect.orDie),
 
-  getRecent: (chars: number = 2000) => Effect.sync(() => {
-    try {
-      let journal = fs.readFileSync(journalPath, "utf8")
-      if (journal.length > chars) {
-        journal = journal.slice(-chars)
-        const headingIdx = journal.indexOf("\n## ")
-        if (headingIdx >= 0) journal = journal.slice(headingIdx)
-      }
-      return journal
-    } catch { return "" }
-  }),
+      appendFifth: (entry: string) => Effect.gen(function* () {
+        const existing = yield* fs.readFileString(fifthJournalPath)
+        yield* fs.writeFileString(fifthJournalPath, existing + entry)
+      }).pipe(Effect.orDie),
 
-  countDecisions: () => Effect.sync(() => {
-    try {
-      const journal = fs.readFileSync(journalPath, "utf8")
-      const matches = journal.match(/## Decision — Autonomous/g)
-      return matches ? matches.length : 0
-    } catch { return 0 }
+      getRecent: (chars: number = 2000) => Effect.gen(function* () {
+        let journal = yield* fs.readFileString(journalPath)
+        if (journal.length > chars) {
+          journal = journal.slice(-chars)
+          const headingIdx = journal.indexOf("\n## ")
+          if (headingIdx >= 0) journal = journal.slice(headingIdx)
+        }
+        return journal
+      }).pipe(Effect.catchAll(() => Effect.succeed(""))),
+
+      countDecisions: () => Effect.gen(function* () {
+        const journal = yield* fs.readFileString(journalPath)
+        const matches = journal.match(/## Decision — Autonomous/g)
+        return matches ? matches.length : 0
+      }).pipe(Effect.catchAll(() => Effect.succeed(0)))
+    }
   })
-})
+)

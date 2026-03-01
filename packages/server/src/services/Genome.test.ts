@@ -1,7 +1,10 @@
 import { describe, it } from "node:test"
 import * as assert from "node:assert"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { NodeContext } from "@effect/platform-node"
 import { GenomeService, GenomeServiceLive } from "./Genome.js"
+
+const TestLayer = Layer.provide(GenomeServiceLive, NodeContext.layer)
 
 describe("GenomeService", () => {
   it("loads genome.json", async () => {
@@ -9,7 +12,7 @@ describe("GenomeService", () => {
       const svc = yield* GenomeService
       return yield* svc.load()
     }).pipe(
-      Effect.provide(GenomeServiceLive),
+      Effect.provide(TestLayer),
       Effect.runPromise
     )
     assert.ok(result.name)
@@ -23,7 +26,7 @@ describe("GenomeService", () => {
       const genome = yield* svc.load()
       return yield* svc.meanTrait(genome)
     }).pipe(
-      Effect.provide(GenomeServiceLive),
+      Effect.provide(TestLayer),
       Effect.runPromise
     )
     assert.ok(result > 0 && result <= 1)
@@ -35,7 +38,7 @@ describe("GenomeService", () => {
       const genome = yield* svc.load()
       return yield* svc.traitKeys(genome)
     }).pipe(
-      Effect.provide(GenomeServiceLive),
+      Effect.provide(TestLayer),
       Effect.runPromise
     )
     assert.ok(result.length === 10)
