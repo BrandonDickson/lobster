@@ -2,7 +2,7 @@ import { useState, useCallback } from "react"
 import { Effect, Stream } from "effect"
 import { RpcClient } from "@effect/rpc"
 import { ChatRpcs, type ChatMessage } from "@lobster/shared"
-import { RpcLive } from "../rpc.js"
+import { ChatRpcLive } from "../rpc.js"
 
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -43,7 +43,7 @@ export function useChat() {
       )
     }).pipe(
       Effect.scoped,
-      Effect.provide(RpcLive)
+      Effect.provide(ChatRpcLive)
     )
 
     try {

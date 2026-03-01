@@ -37,6 +37,19 @@ export const Contact = Schema.Struct({
   protocol: Schema.String
 })
 
+export const MergeSource = Schema.Struct({
+  id: Schema.String,
+  generation: Schema.Number,
+  peak_trait: Schema.String
+})
+
+export const MergeRecord = Schema.Struct({
+  generation: Schema.Number,
+  timestamp: Schema.String,
+  sources: Schema.Array(MergeSource),
+  method: Schema.String
+})
+
 export const Genome = Schema.Struct({
   name: Schema.String,
   designation: Schema.String,
@@ -49,7 +62,7 @@ export const Genome = Schema.Struct({
   forks: Schema.Array(Fork),
   contact: Contact,
   lastMolt: Schema.optional(Schema.String),
-  merged: Schema.optional(Schema.Boolean)
+  merged: Schema.optional(MergeRecord)
 })
 
 export type Genome = typeof Genome.Type

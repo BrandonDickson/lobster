@@ -2,7 +2,7 @@ import { useState, useEffect } from "react"
 import { Effect } from "effect"
 import { RpcClient } from "@effect/rpc"
 import { GenomeRpcs, type Genome } from "@lobster/shared"
-import { RpcLive } from "../rpc.js"
+import { GenomeRpcLive } from "../rpc.js"
 
 export function useGenome() {
   const [genome, setGenome] = useState<Genome | null>(null)
@@ -14,7 +14,7 @@ export function useGenome() {
       return yield* client.GetGenome()
     }).pipe(
       Effect.scoped,
-      Effect.provide(RpcLive)
+      Effect.provide(GenomeRpcLive)
     )
 
     Effect.runPromise(program).then(
